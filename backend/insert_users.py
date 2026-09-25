@@ -1,15 +1,17 @@
 
 import sqlite3
+import os
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sistema_it.db")
 
 def init_db():
-    conn = sqlite3.connect("sistema_it.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS tickets (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             solicitante_email TEXT,
-            sede TEXT,
-            categoria TEXT,
+            tipo_requerimiento TEXT,
             prioridad TEXT,
             descripcion TEXT,
             estado TEXT DEFAULT 'Pendiente',
