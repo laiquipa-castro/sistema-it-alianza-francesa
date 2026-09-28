@@ -10,7 +10,7 @@ from __future__ import annotations
 import html
 import smtplib
 from email.message import EmailMessage
-from typing import List
+from typing import List, Optional
 
 from config import (
     APP_URL,
@@ -75,14 +75,17 @@ def send_new_ticket_email(
     categoria: str,
     descripcion: str,
     ticket_id: int,
+    codigo: Optional[str] = None,
 ) -> bool:
     """Notifica a todo el equipo de TI la creación de un nuevo ticket."""
-    subject = f"[NUEVO TICKET TI] - Sede: {sede} - {categoria}"
+    codigo_txt = f" - {codigo}" if codigo else ""
+    subject = f"[NUEVO TICKET TI]{codigo_txt} - Sede: {sede} - {categoria}"
     link = f"{APP_URL}/?ticket={ticket_id}"
     content = (
         "<p><strong>Ticket:</strong> "
         f"#{ticket_id}</p>"
-        f"<p><strong>Remitente:</strong> {html.escape(solicitante)}</p>"
+        + (f"<p><strong>Código de seguimiento:</strong> {html.escape(codigo)}</p>" if codigo else "")
+        + f"<p><strong>Remitente:</strong> {html.escape(solicitante)}</p>"
         f"<p><strong>Sede:</strong> {html.escape(sede)}</p>"
         f"<p><strong>Categoría:</strong> {html.escape(categoria)}</p>"
         "<p><strong>Detalle del requerimiento:</strong></p>"

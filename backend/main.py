@@ -5,6 +5,7 @@ La capa de datos está desacoplada en :mod:`database`, :mod:`models` y
 negocio de forma agnóstica al motor de base de datos.
 """
 from contextlib import asynccontextmanager
+from datetime import date, datetime
 from typing import List, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
@@ -15,11 +16,15 @@ from sqlalchemy.orm import Session, joinedload
 
 import models  # noqa: F401  # registra los modelos en Base.metadata
 from database import Base, SessionLocal, engine, get_db, init_db
-from models import Sede, Ticket, Usuario
+from models import Sede, SolucionFrecuente, Ticket, Usuario
 from schemas import (
+    AsistenteIn,
     ESTADOS_TICKET,
     SedeIn,
     SedeOut,
+    SolucionIn,
+    SolucionOut,
+    SolucionUpdate,
     TicketIn,
     TicketOut,
     TicketUpdate,
@@ -31,6 +36,9 @@ from schemas import (
 )
 from config import CORS_ORIGINS
 from email_service import send_new_ticket_email, send_ticket_resolved_email
+from whatsapp_service import send_new_ticket_whatsapp
+from ai_service import buscar_soluciones, consultar_deepseek
+from seed_soluciones import seed_soluciones
 
 # ---------------------------------------------------------------------------
 # Aplicación y CORS
@@ -81,6 +89,7 @@ USUARIOS_INICIALES = [
         "tipo_colaborador": "Administrativo",
         "sede": "Miraflores",
         "cargo_ti": "Responsable de Sistemas - Administrador Maestro TI",
+        "telefono_whatsapp": "+51986068159",
     },
     {
         "email": "jesus.barbaran@alianzafrancesa.org.pe",
@@ -126,6 +135,7 @@ def _usuario_to_dict(u: Usuario) -> dict:
         "sede_id": u.sede_id,
         "sede_nombre": u.sede.nombre if u.sede else None,
         "cargo_ti": u.cargo_ti,
+        "telefono_whatsapp": u.telefono_whatsapp,
     }
 
 
@@ -133,17 +143,44 @@ def _ticket_to_dict(t: Ticket) -> dict:
     return {
         "id": t.id,
         "solicitante_email": t.solicitante_email,
+        "user_name": t.user_name,
         "tipo_requerimiento": t.tipo_requerimiento,
         "prioridad": t.prioridad,
         "descripcion": t.descripcion,
         "estado": t.estado,
         "tecnico_asignado": t.tecnico_asignado,
+        "tecnico_asignado_id": t.tecnico_asignado_id,
         "sede": t.sede,
         "tipo_colaborador": t.tipo_colaborador,
         "notas_tecnicas": t.notas_tecnicas,
         "fecha_creacion": t.fecha_creacion,
         "sede_id": t.sede_id,
+        "codigo": t.codigo,
+        "fecha_resolucion": t.fecha_resolucion,
     }
+
+
+def _generar_codigo(db: Session) -> str:
+    """Genera un código correlativo único por año (ej. AF-2026-0001)."""
+    anio = date.today().year
+    prefix = f"AF-{anio}-"
+    ultimo = (
+        db.query(Ticket.codigo)
+        .filter(Ticket.codigo.like(f"{prefix}%"))
+        .order_by(Ticket.id.desc())
+        .first()
+    )
+    seq = 1
+    if ultimo and ultimo[0]:
+        try:
+            seq = int(ultimo[0].rsplit("-", 1)[-1]) + 1
+        except ValueError:
+            seq = 1
+    while True:
+        codigo = f"{prefix}{seq:04d}"
+        if not db.query(Ticket).filter(Ticket.codigo == codigo).first():
+            return codigo
+        seq += 1
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +194,31 @@ def _migrate() -> None:
     de producción se recomienda usar Alembic para un control más estricto.
     """
     insp = inspect(engine)
-    if "tickets" not in insp.get_table_names():
-        return
-    cols = {c["name"] for c in insp.get_columns("tickets")}
-    if "sede_id" not in cols:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE tickets ADD COLUMN sede_id INTEGER"))
+    tablas = insp.get_table_names()
+
+    if "tickets" in tablas:
+        cols = {c["name"] for c in insp.get_columns("tickets")}
+        if "sede_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN sede_id INTEGER"))
+        if "codigo" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN codigo VARCHAR(30)"))
+        if "fecha_resolucion" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN fecha_resolucion DATETIME"))
+        if "tecnico_asignado_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN tecnico_asignado_id INTEGER"))
+        if "user_name" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN user_name VARCHAR(255)"))
+
+    if "usuarios" in tablas:
+        cols = {c["name"] for c in insp.get_columns("usuarios")}
+        if "telefono_whatsapp" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE usuarios ADD COLUMN telefono_whatsapp VARCHAR(30)"))
 
 
 def seed_data(db: Session) -> None:
@@ -185,7 +241,10 @@ def seed_data(db: Session) -> None:
         existing.tipo_colaborador = u["tipo_colaborador"]
         existing.sede_id = sede_ids.get(u["sede"])
         existing.cargo_ti = u["cargo_ti"]
+        existing.telefono_whatsapp = u.get("telefono_whatsapp")
     db.commit()
+
+    seed_soluciones(db)
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +363,14 @@ def delete_sede(sede_id: int, db: Session = Depends(get_db), user: dict = Depend
 # ---------------------------------------------------------------------------
 @app.get("/api/usuarios", response_model=List[UsuarioOut])
 def list_usuarios(db: Session = Depends(get_db), user: dict = Depends(require_admin)):
-    rows = db.query(Usuario).options(joinedload(Usuario.sede)).order_by(Usuario.id).all()
+    """Lista únicamente al personal técnico (roles TI)."""
+    rows = (
+        db.query(Usuario)
+        .options(joinedload(Usuario.sede))
+        .filter(Usuario.rol.in_(TI_ROLES))
+        .order_by(Usuario.id)
+        .all()
+    )
     return [_usuario_to_dict(u) for u in rows]
 
 
@@ -377,22 +443,35 @@ def delete_usuario(usuario_id: int, db: Session = Depends(get_db), user: dict = 
 # Endpoints: Tickets
 # ---------------------------------------------------------------------------
 @app.get("/api/tickets", response_model=List[TicketOut])
-def list_tickets(db: Session = Depends(get_db)):
-    rows = db.query(Ticket).order_by(Ticket.id.desc()).all()
+def list_tickets(db: Session = Depends(get_db), user: dict = Depends(_get_current_user)):
+    q = db.query(Ticket)
+    if user["rol"] not in TI_ROLES:
+        q = q.filter(Ticket.solicitante_email == user["email"])
+    rows = q.order_by(Ticket.id.desc()).all()
     return [_ticket_to_dict(t) for t in rows]
 
 
 @app.post("/api/tickets", response_model=TicketOut)
 def create_ticket(ticket: TicketIn, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    # Resuelve el solicitante desde el directorio corporativo para obtener el
+    # nombre completo (displayName) y su sede/perfil, sin insertarlo en la
+    # gestión de usuarios TI (solo se usa como referencia del ticket).
+    _usuario = db.query(Usuario).filter(Usuario.email == ticket.solicitante_email).first()
+    solicitante_nombre = (ticket.user_name or (_usuario.nombre if _usuario else None))
+    perfil_colaborador = ticket.tipo_colaborador or (_usuario.tipo_colaborador if _usuario else None) or ""
+    sede_origen = ticket.sede or (_usuario.sede.nombre if _usuario and _usuario.sede else None) or ""
+
     t = Ticket(
+        codigo=_generar_codigo(db),
         solicitante_email=ticket.solicitante_email,
+        user_name=solicitante_nombre,
         tipo_requerimiento=ticket.tipo_requerimiento,
         prioridad=ticket.prioridad,
         descripcion=ticket.descripcion,
         estado=ticket.estado,
         tecnico_asignado=ticket.tecnico_asignado,
-        sede=ticket.sede,
-        tipo_colaborador=ticket.tipo_colaborador,
+        sede=sede_origen or ticket.sede,
+        tipo_colaborador=perfil_colaborador or ticket.tipo_colaborador,
         notas_tecnicas=ticket.notas_tecnicas,
         sede_id=ticket.sede_id,
     )
@@ -403,11 +482,27 @@ def create_ticket(ticket: TicketIn, background_tasks: BackgroundTasks, db: Sessi
     # Notificación por correo al equipo de TI (en segundo plano)
     background_tasks.add_task(
         send_new_ticket_email,
-        solicitante=t.solicitante_email,
+        solicitante=t.user_name or t.solicitante_email,
         sede=t.sede or "Sin sede",
         categoria=t.tipo_requerimiento or "General",
         descripcion=t.descripcion or "",
         ticket_id=t.id,
+        codigo=t.codigo,
+    )
+
+    # Alerta automática por WhatsApp al técnico principal (segundo plano y a
+    # prueba de fallos: si el gateway no responde, el ticket ya está guardado).
+    background_tasks.add_task(
+        send_new_ticket_whatsapp,
+        solicitante=t.user_name or t.solicitante_email,
+        email=t.solicitante_email,
+        sede=t.sede or "",
+        perfil=t.tipo_colaborador or "",
+        categoria=t.tipo_requerimiento or "",
+        prioridad=t.prioridad or "",
+        descripcion=t.descripcion or "",
+        ticket_id=t.id,
+        codigo=t.codigo,
     )
     return _ticket_to_dict(t)
 
@@ -425,6 +520,7 @@ def update_ticket(ticket_id: int, ticket_update: TicketUpdate, background_tasks:
         and ticket_update.sede is None
         and ticket_update.notas_tecnicas is None
         and ticket_update.sede_id is None
+        and ticket_update.tecnico_asignado_id is None
     ):
         raise HTTPException(status_code=400, detail="No hay campos para actualizar")
 
@@ -435,8 +531,15 @@ def update_ticket(ticket_id: int, ticket_update: TicketUpdate, background_tasks:
                 detail=f"Estado inválido. Valores permitidos: {', '.join(ESTADOS_TICKET)}",
             )
         t.estado = ticket_update.estado
+        if ticket_update.estado == "Solucionado":
+            t.fecha_resolucion = datetime.now()
     if ticket_update.tecnico_asignado is not None:
         t.tecnico_asignado = ticket_update.tecnico_asignado
+    if ticket_update.tecnico_asignado_id is not None:
+        t.tecnico_asignado_id = ticket_update.tecnico_asignado_id
+        tecnico = db.get(Usuario, ticket_update.tecnico_asignado_id)
+        if tecnico:
+            t.tecnico_asignado = tecnico.nombre
     if ticket_update.sede is not None:
         t.sede = ticket_update.sede
     if ticket_update.notas_tecnicas is not None:
@@ -457,6 +560,101 @@ def update_ticket(ticket_id: int, ticket_update: TicketUpdate, background_tasks:
         )
 
     return _ticket_to_dict(t)
+
+
+@app.get("/api/tecnicos", response_model=List[dict])
+def list_tecnicos(db: Session = Depends(get_db), user: dict = Depends(require_ti)):
+    """Lista los técnicos del equipo TI disponibles para asignación."""
+    rows = (
+        db.query(Usuario)
+        .filter(Usuario.rol.in_(TI_ROLES))
+        .order_by(Usuario.nombre)
+        .all()
+    )
+    return [
+        {
+            "id": u.id,
+            "nombre": u.nombre,
+            "email": u.email,
+            "telefono_whatsapp": u.telefono_whatsapp,
+        }
+        for u in rows
+    ]
+
+
+@app.post("/api/asistente")
+def asistente(data: AsistenteIn, db: Session = Depends(get_db)):
+    """Asistente virtual de primer nivel (soluciones frecuentes + DeepSeek)."""
+    soluciones = buscar_soluciones(db, data.consulta)
+    if soluciones:
+        return {
+            "soluciones": [
+                {
+                    "titulo": s.titulo,
+                    "categoria": s.categoria,
+                    "pasos": [p.strip() for p in (s.pasos or "").splitlines() if p.strip()],
+                }
+                for s in soluciones
+            ],
+            "respuesta_ia": "",
+        }
+    ia = consultar_deepseek(data.consulta)
+    pasos = [p.strip() for p in ia.splitlines() if p.strip()] if ia else []
+    return {
+        "soluciones": [{"titulo": "Sugerencia del asistente", "categoria": "IA", "pasos": pasos}] if pasos else [],
+        "respuesta_ia": ia,
+    }
+
+
+@app.get("/api/soluciones", response_model=List[SolucionOut])
+def list_soluciones(db: Session = Depends(get_db), user: dict = Depends(require_ti)):
+    """Lista la base de conocimiento (soluciones rápidas) para el equipo TI."""
+    return db.query(SolucionFrecuente).order_by(SolucionFrecuente.id.desc()).all()
+
+
+@app.post("/api/soluciones", response_model=SolucionOut)
+def create_solucion(data: SolucionIn, db: Session = Depends(get_db), user: dict = Depends(require_ti)):
+    s = SolucionFrecuente(
+        titulo=data.titulo,
+        palabras_clave=data.palabras_clave or "",
+        pasos=data.pasos,
+        categoria=data.categoria,
+        activo=data.activo,
+    )
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+@app.put("/api/soluciones/{solucion_id}", response_model=SolucionOut)
+def update_solucion(solucion_id: int, data: SolucionUpdate, db: Session = Depends(get_db), user: dict = Depends(require_ti)):
+    s = db.get(SolucionFrecuente, solucion_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="Solución no encontrada")
+    if data.titulo is not None:
+        s.titulo = data.titulo
+    if data.palabras_clave is not None:
+        s.palabras_clave = data.palabras_clave
+    if data.pasos is not None:
+        s.pasos = data.pasos
+    if data.categoria is not None:
+        s.categoria = data.categoria
+    if data.activo is not None:
+        s.activo = data.activo
+    db.commit()
+    db.refresh(s)
+    return s
+
+
+@app.delete("/api/soluciones/{solucion_id}")
+def delete_solucion(solucion_id: int, db: Session = Depends(get_db), user: dict = Depends(require_ti)):
+    s = db.get(SolucionFrecuente, solucion_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail="Solución no encontrada")
+    db.delete(s)
+    db.commit()
+    return {"ok": True, "detail": "Solución eliminada"}
 
 
 @app.get("/")

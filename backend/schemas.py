@@ -65,6 +65,7 @@ class UsuarioIn(BaseModel):
     tipo_colaborador: Optional[str] = None
     sede_id: Optional[int] = None
     cargo_ti: Optional[str] = None
+    telefono_whatsapp: Optional[str] = None
 
     @field_validator("email")
     @classmethod
@@ -109,6 +110,7 @@ class UsuarioOut(ORMModel):
     sede_id: Optional[int] = None
     sede_nombre: Optional[str] = None
     cargo_ti: Optional[str] = None
+    telefono_whatsapp: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +121,41 @@ class VerificarIn(BaseModel):
     nombre: Optional[str] = None
 
 
+class AsistenteIn(BaseModel):
+    consulta: str
+
+
+class SolucionIn(BaseModel):
+    titulo: str
+    palabras_clave: Optional[str] = None
+    pasos: str
+    categoria: str
+    activo: bool = True
+
+
+class SolucionUpdate(BaseModel):
+    titulo: Optional[str] = None
+    palabras_clave: Optional[str] = None
+    pasos: Optional[str] = None
+    categoria: Optional[str] = None
+    activo: Optional[bool] = None
+
+
+class SolucionOut(ORMModel):
+    id: int
+    categoria: str
+    palabras_clave: str
+    titulo: str
+    pasos: str
+    activo: bool
+
+
 # ---------------------------------------------------------------------------
 # Tickets
 # ---------------------------------------------------------------------------
 class TicketIn(BaseModel):
     solicitante_email: str
+    user_name: Optional[str] = None
     tipo_requerimiento: Optional[str] = None
     prioridad: Optional[str] = None
     descripcion: Optional[str] = None
@@ -147,6 +179,7 @@ class TicketIn(BaseModel):
 class TicketUpdate(BaseModel):
     estado: Optional[str] = None
     tecnico_asignado: Optional[str] = None
+    tecnico_asignado_id: Optional[int] = None
     sede: Optional[str] = None
     notas_tecnicas: Optional[str] = None
     sede_id: Optional[int] = None
@@ -155,13 +188,17 @@ class TicketUpdate(BaseModel):
 class TicketOut(ORMModel):
     id: int
     solicitante_email: str
+    user_name: Optional[str] = None
     tipo_requerimiento: Optional[str] = None
     prioridad: Optional[str] = None
     descripcion: Optional[str] = None
     estado: Optional[str] = None
     tecnico_asignado: Optional[str] = None
+    tecnico_asignado_id: Optional[int] = None
     sede: Optional[str] = None
     tipo_colaborador: Optional[str] = None
     notas_tecnicas: Optional[str] = None
     fecha_creacion: Optional[datetime] = None
     sede_id: Optional[int] = None
+    codigo: Optional[str] = None
+    fecha_resolucion: Optional[datetime] = None

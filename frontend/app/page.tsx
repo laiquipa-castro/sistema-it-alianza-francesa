@@ -6,7 +6,7 @@ import { jwtDecode } from 'jwt-decode';
 import { 
   ShieldAlert, CheckCircle2, Clock, 
   PlusCircle, LayoutDashboard, LogOut,
-  Send
+  Send, Menu, X, Bot, BookOpen, SearchX, Search
 } from 'lucide-react';
 
 const GOOGLE_CLIENT_ID = "274739568755-s1kq1q8orh7e3edneubiahgimtrgvrgi.apps.googleusercontent.com";
@@ -17,15 +17,19 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 interface Ticket {
   id: number;
   solicitante_email: string;
+  user_name?: string;
   tipo_requerimiento: string;
   prioridad: string;
   descripcion: string;
   estado: string;
   tecnico_asignado: string;
+  tecnico_asignado_id?: number;
   sede?: string;
   tipo_colaborador?: string;
   notas_tecnicas?: string;
   fecha_creacion: string;
+  codigo?: string;
+  fecha_resolucion?: string;
 }
 
 interface GoogleUserData {
@@ -60,6 +64,91 @@ function estadoBadgeClasses(estado: string): string {
     default:
       return `${base} bg-slate-100 text-slate-700 border-slate-300`;
   }
+}
+
+// Formatea el correlativo único del ticket: "AF-2026-0001 · Ticket #6"
+function formatoCorrelativo(t: Ticket): string {
+  return t.codigo ? `${t.codigo} · Ticket #${t.id}` : `Ticket #${t.id}`;
+}
+
+// Formatea el solicitante: "Nombre Completo (correo@alianzafrancesa.org.pe)"
+function formatoSolicitante(t: Ticket): string {
+  const nombre = t.user_name?.trim();
+  const correo = t.solicitante_email?.trim();
+  if (nombre && correo) return `${nombre} (${correo})`;
+  return correo || nombre || '—';
+}
+
+// Formatea fecha/hora en formato legible: "26/09/2026 09:26 AM"
+function formatoFecha(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString('es-PE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+// Extrae el id de ticket desde la URL (/admin/tickets/[id] o ?ticket=[id])
+function leerTicketDeURL(): number | null {
+  if (typeof window === 'undefined') return null;
+  const m = window.location.pathname.match(/\/admin\/tickets\/(\d+)/);
+  if (m) return Number(m[1]);
+  const q = new URLSearchParams(window.location.search).get('ticket');
+  if (q && /^\d+$/.test(q)) return Number(q);
+  return null;
+}
+
+// Pipeline de avance del ticket (stepper visual)
+const PASOS_TICKET = ['Recibido', 'En Revisión', 'En Proceso', 'Solucionado'];
+
+function indiceProgreso(estado: string): number {
+  switch (estado) {
+    case 'Pendiente':
+      return 0;
+    case 'En Proceso':
+      return 2;
+    case 'Solucionado':
+    case 'Cerrado':
+      return 3;
+    default:
+      return 0;
+  }
+}
+
+function TicketStepper({ estado }: { estado: string }) {
+  const activo = indiceProgreso(estado);
+  return (
+    <div className="flex items-start w-full mt-4 mb-2">
+      {PASOS_TICKET.map((paso, i) => {
+        const alcanzado = i <= activo;
+        return (
+          <div key={paso} className={`flex items-start ${i < PASOS_TICKET.length - 1 ? 'flex-1' : ''}`}>
+            <div className="flex flex-col items-center min-w-0">
+              <div
+                className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold border-2 transition-colors ${
+                  alcanzado ? 'bg-[#002395] border-[#002395] text-white' : 'bg-white border-slate-300 text-slate-400'
+                }`}
+              >
+                {alcanzado ? '✓' : i + 1}
+              </div>
+              <span className={`mt-1 text-[9px] font-semibold whitespace-nowrap ${alcanzado ? 'text-[#002395]' : 'text-slate-400'}`}>
+                {paso}
+              </span>
+            </div>
+            {i < PASOS_TICKET.length - 1 && (
+              <div className={`flex-1 h-0.5 mt-3 mx-1 rounded-full ${alcanzado ? 'bg-[#002395]' : 'bg-slate-200'}`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 // Subcomponente exclusivo para manejar el botón de inicio de sesión con Google
@@ -120,7 +209,7 @@ function GoogleLoginButton({ onSuccess, onError }: { onSuccess: (credentialRespo
 
 function MainApp() {
   const [user, setUser] = useState<{ email: string; name: string; role: string; rol?: string; cargo_ti?: string; picture?: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'crear' | 'mis-tickets' | 'dashboard' | 'usuarios' | 'sedes'>('crear');
+  const [activeTab, setActiveTab] = useState<'crear' | 'mis-tickets' | 'dashboard' | 'usuarios' | 'sedes' | 'entrenamiento'>('crear');
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -135,10 +224,41 @@ function MainApp() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [sedes, setSedes] = useState<any[]>([]);
   const [notasDraft, setNotasDraft] = useState<Record<number, string>>({});
+  const [codigoSeguimiento, setCodigoSeguimiento] = useState<string | null>(null);
+  const [ticketDetalle, setTicketDetalle] = useState<Ticket | null>(null);
+
+  // Filtros combinados del dashboard/bandeja (aplican para el equipo TI)
+  const [filtroSede, setFiltroSede] = useState('');
+  const [filtroEstado, setFiltroEstado] = useState('');
+  const [filtroPrioridad, setFiltroPrioridad] = useState('');
+  const [filtroTipoColab, setFiltroTipoColab] = useState('');
+  const [filtroDesde, setFiltroDesde] = useState('');
+  const [filtroHasta, setFiltroHasta] = useState('');
+  const [filtroBusqueda, setFiltroBusqueda] = useState('');
+
+  // Asignación de técnicos + WhatsApp + menú móvil + asistente virtual
+  const [tecnicos, setTecnicos] = useState<any[]>([]);
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const [asistenteAbierto, setAsistenteAbierto] = useState(false);
+  const [asistenteConsulta, setAsistenteConsulta] = useState('');
+  const [asistenteResultado, setAsistenteResultado] = useState<any[]>([]);
+  const [asistenteLoading, setAsistenteLoading] = useState(false);
+
+  // Base de conocimiento IA (entrenamiento, solo TI)
+  const [soluciones, setSoluciones] = useState<any[]>([]);
+  const [nuevaSolucion, setNuevaSolucion] = useState({ titulo: '', palabras_clave: '', pasos: '', categoria: 'Impresoras' });
+
+  // Chat flotante global (Asistente de IA)
+  const [chatAbierto, setChatAbierto] = useState(false);
+  const [chatMensajes, setChatMensajes] = useState<{ rol: 'user' | 'bot'; texto: string }[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
 
   const fetchTickets = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tickets`);
+      const res = await fetch(`${API_BASE_URL}/api/tickets`, {
+        headers: { 'X-User-Email': user?.email || '' }
+      });
       const data = await res.json();
       setTickets(data);
     } catch (err) {
@@ -166,15 +286,52 @@ function MainApp() {
     }
   };
 
+  const fetchTecnicos = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/tecnicos`, {
+        headers: { 'X-User-Email': user?.email || '' }
+      });
+      if (res.ok) setTecnicos(await res.json());
+    } catch (err) {
+      console.error("Error cargando técnicos:", err);
+    }
+  };
+
   useEffect(() => {
     if (user) {
       fetchTickets();
+      fetchSedes();
+      if (TI_ROLES.includes(user.rol || '')) {
+        fetchTecnicos();
+        fetchSoluciones();
+      }
       if (user.rol === 'ADMIN_TI') {
         fetchUsuarios();
-        fetchSedes();
       }
     }
   }, [user]);
+
+  // Deep-link: si la URL trae /admin/tickets/[id] o ?ticket=[id], abre el detalle
+  useEffect(() => {
+    const id = leerTicketDeURL();
+    if (!id) return;
+    const t = tickets.find((x) => x.id === id);
+    if (t) setTicketDetalle(t);
+  }, [tickets]);
+
+  const abrirDetalle = (t: Ticket) => {
+    setTicketDetalle(t);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', `/admin/tickets/${t.id}`);
+    }
+  };
+
+  const cerrarDetalle = () => {
+    setTicketDetalle(null);
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', '/');
+    }
+  };
 
   const handleGoogleSuccess = async (credentialResponse: any) => {
     try {
@@ -243,11 +400,12 @@ function MainApp() {
     setLoading(true);
 
     try {
-      await fetch(`${API_BASE_URL}/api/tickets`, {
+      const res = await fetch(`${API_BASE_URL}/api/tickets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           solicitante_email: user?.email,
+          user_name: user?.name,
           tipo_requerimiento: categoria,
           prioridad: prioridad,
           descripcion: descripcion,
@@ -255,8 +413,10 @@ function MainApp() {
           tipo_colaborador: tipoColaborador
         })
       });
+      const data = await res.json();
       setDescripcion('');
       setSuccessMsg(true);
+      if (data.codigo) setCodigoSeguimiento(data.codigo);
       fetchTickets();
       setTimeout(() => setSuccessMsg(false), 4000);
     } catch (err) {
@@ -292,6 +452,116 @@ function MainApp() {
       return n;
     });
     fetchTickets();
+  };
+
+  const handleAsignarTecnico = async (ticketId: number, tecnicoId: string) => {
+    if (!tecnicoId) return;
+    await fetch(`${API_BASE_URL}/api/tickets/${ticketId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+      body: JSON.stringify({ tecnico_asignado_id: Number(tecnicoId) })
+    });
+    fetchTickets();
+  };
+
+  const handleWhatsApp = (t: Ticket) => {
+    const tecnico = tecnicos.find((tc) => tc.id === t.tecnico_asignado_id);
+    const numero = (tecnico?.telefono_whatsapp || '+51986068159').replace(/\D/g, '');
+    const resumen = (t.descripcion || '').slice(0, 120);
+    const msg = `Soporte TI Alianza\nCódigo: ${formatoCorrelativo(t)}\nSede: ${t.sede || '—'}\nSolicitud: ${resumen}`;
+    window.open(`https://wa.me/${numero}?text=${encodeURIComponent(msg)}`, '_blank');
+  };
+
+  const consultarAsistente = async () => {
+    if (!asistenteConsulta.trim()) return;
+    setAsistenteLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/asistente`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consulta: asistenteConsulta })
+      });
+      const data = await res.json();
+      setAsistenteResultado(data.soluciones || []);
+    } catch (err) {
+      setAsistenteResultado([]);
+    } finally {
+      setAsistenteLoading(false);
+    }
+  };
+
+  const fetchSoluciones = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/soluciones`, {
+        headers: { 'X-User-Email': user?.email || '' }
+      });
+      if (res.ok) setSoluciones(await res.json());
+    } catch (err) {
+      console.error("Error cargando soluciones:", err);
+    }
+  };
+
+  const handleCreateSolucion = async () => {
+    if (!nuevaSolucion.titulo.trim() || !nuevaSolucion.pasos.trim()) return;
+    await fetch(`${API_BASE_URL}/api/soluciones`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+      body: JSON.stringify(nuevaSolucion)
+    });
+    setNuevaSolucion({ titulo: '', palabras_clave: '', pasos: '', categoria: 'Impresoras' });
+    fetchSoluciones();
+  };
+
+  const handleToggleSolucion = async (id: number, activo: boolean) => {
+    await fetch(`${API_BASE_URL}/api/soluciones/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+      body: JSON.stringify({ activo })
+    });
+    fetchSoluciones();
+  };
+
+  const handleDeleteSolucion = async (id: number) => {
+    if (!confirm('¿Eliminar esta solución?')) return;
+    await fetch(`${API_BASE_URL}/api/soluciones/${id}`, {
+      method: 'DELETE',
+      headers: { 'X-User-Email': user?.email || '' }
+    });
+    fetchSoluciones();
+  };
+
+  const enviarChat = async () => {
+    const texto = chatInput.trim();
+    if (!texto || chatLoading) return;
+    setChatMensajes((prev) => [...prev, { rol: 'user', texto }]);
+    setChatInput('');
+    setChatLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/asistente`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consulta: texto })
+      });
+      const data = await res.json();
+      const sols = data.soluciones || [];
+      if (sols.length > 0) {
+        const pasos = sols.flatMap((s: any) => (s.pasos || []) as string[]);
+        setChatMensajes((prev) => [...prev, { rol: 'bot', texto: pasos.join('\n') }]);
+      } else {
+        setChatMensajes((prev) => [...prev, { rol: 'bot', texto: 'No encontré una solución automática. Te recomiendo generar un ticket para que el equipo de TI te apoye.' }]);
+      }
+    } catch (err) {
+      setChatMensajes((prev) => [...prev, { rol: 'bot', texto: 'Ocurrió un error al consultar. Intenta de nuevo.' }]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const irAFormulario = () => {
+    const ultimo = [...chatMensajes].reverse().find((m) => m.rol === 'user');
+    if (ultimo) setDescripcion(ultimo.texto);
+    setChatAbierto(false);
+    setActiveTab('crear');
   };
 
   const handleUserUpdate = async (id: number, campos: Record<string, any>) => {
@@ -395,16 +665,222 @@ function MainApp() {
   const isAdmin = user?.rol === 'ADMIN_TI';
   const isTI = !!user && TI_ROLES.includes(user.rol || '');
 
-  const pendientes = tickets.filter(t => t.estado === 'Pendiente').length;
-  const enProceso = tickets.filter(t => t.estado === 'En Proceso').length;
-  const solucionados = tickets.filter(t => t.estado === 'Solucionado').length;
-  const cerrados = tickets.filter(t => t.estado === 'Cerrado').length;
+  const coincideBusqueda = (t: Ticket) => {
+    const q = filtroBusqueda.trim().toLowerCase();
+    if (!q) return true;
+    const haystack = [
+      t.codigo || '',
+      String(t.id),
+      t.solicitante_email || '',
+      t.user_name || '',
+      t.sede || '',
+      t.tipo_requerimiento || '',
+      t.descripcion || '',
+      t.tecnico_asignado || '',
+    ].join(' ').toLowerCase();
+    return haystack.includes(q);
+  };
+
+  const ticketsFiltrados = tickets.filter((t) => {
+    if (filtroSede && t.sede !== filtroSede) return false;
+    if (filtroEstado && t.estado !== filtroEstado) return false;
+    if (filtroPrioridad && t.prioridad !== filtroPrioridad) return false;
+    if (filtroTipoColab && t.tipo_colaborador !== filtroTipoColab) return false;
+    if (filtroDesde && new Date(t.fecha_creacion) < new Date(filtroDesde)) return false;
+    if (filtroHasta && new Date(t.fecha_creacion) > new Date(filtroHasta + 'T23:59:59')) return false;
+    if (!coincideBusqueda(t)) return false;
+    return true;
+  });
+
+  const pendientes = ticketsFiltrados.filter(t => t.estado === 'Pendiente').length;
+  const enProceso = ticketsFiltrados.filter(t => t.estado === 'En Proceso').length;
+  const solucionados = ticketsFiltrados.filter(t => t.estado === 'Solucionado').length;
+  const cerrados = ticketsFiltrados.filter(t => t.estado === 'Cerrado').length;
+
+  // Resumen del usuario (Mis Solicitudes)
+  const misTicketsBase = tickets.filter(t => t.solicitante_email === user?.email);
+  const misTicketsTotal = misTicketsBase.length;
+  const misTicketsEnProceso = misTicketsBase.filter(t => t.estado === 'En Proceso').length;
+  const misTicketsResueltos = misTicketsBase.filter(t => t.estado === 'Solucionado' || t.estado === 'Cerrado').length;
+  const misTicketsFiltrados = misTicketsBase.filter(t => coincideBusqueda(t));
+
+  const promedioAtencion = (() => {
+    const resueltos = ticketsFiltrados.filter(t => t.estado === 'Solucionado' && t.fecha_resolucion);
+    if (resueltos.length === 0) return '—';
+    const totalMs = resueltos.reduce((acc, t) => acc + (new Date(t.fecha_resolucion!).getTime() - new Date(t.fecha_creacion).getTime()), 0);
+    const horas = totalMs / resueltos.length / 3600000;
+    return horas >= 24 ? `${(horas / 24).toFixed(1)} días` : `${horas.toFixed(1)} h`;
+  })();
+
+  const exportarCSV = () => {
+    const cabeceras = ['Código', 'Ticket #', 'Solicitante', 'Sede', 'Tipo Colaborador', 'Prioridad', 'Estado', 'Fecha Creación', 'Descripción'];
+    const filas = ticketsFiltrados.map(t => [t.codigo || '', String(t.id), formatoSolicitante(t), t.sede || '', t.tipo_colaborador || '', t.prioridad || '', t.estado, t.fecha_creacion, t.descripcion || '']);
+    const csv = [cabeceras, ...filas].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'reporte_tickets.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const REPORTE_CSS = `
+  :root { --rojo:#e30613; --azul:#002395; --gris:#f4f5f7; --borde:#e5e7eb; --texto:#1f2937; --muted:#6b7280; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--texto); background: #f4f5f7; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .reporte-card { background:#fff; border-radius:16px; border:1px solid var(--borde); box-shadow:0 4px 18px rgba(0,0,0,.06); margin:20px auto; max-width:820px; overflow:hidden; page-break-after:always; }
+  .reporte-card:last-child { page-break-after:auto; }
+  .encabezado { display:flex; align-items:center; gap:16px; padding:20px 24px; border-bottom:3px solid var(--rojo); background:linear-gradient(90deg,#fff,#fdf2f2); }
+  .logo { height:56px; width:auto; }
+  .encabezado-info { flex:1; }
+  .ticket-num { font-size:22px; font-weight:800; color:var(--azul); letter-spacing:.5px; }
+  .codigo { font-size:12px; color:var(--muted); margin-top:2px; }
+  .fecha-emision { font-size:12px; color:var(--muted); text-align:right; }
+  .seccion { padding:18px 24px; border-bottom:1px solid var(--borde); }
+  .seccion h2 { font-size:12px; text-transform:uppercase; letter-spacing:1.2px; color:var(--rojo); font-weight:800; margin-bottom:14px; }
+  .grid-datos { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .campo { background:var(--gris); border:1px solid var(--borde); border-radius:10px; padding:12px 14px; }
+  .campo.ancho { grid-column:1 / -1; }
+  .campo span { display:block; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+  .campo strong { font-size:14px; color:var(--texto); }
+  .detalle p { font-size:14px; line-height:1.6; color:var(--texto); }
+  .timeline { position:relative; padding-left:8px; }
+  .nodo { display:flex; gap:14px; padding-bottom:18px; position:relative; }
+  .nodo:not(:last-child)::before { content:''; position:absolute; left:17px; top:32px; bottom:0; width:2px; background:var(--borde); }
+  .marcador { flex-shrink:0; width:36px; height:36px; border-radius:50%; background:var(--azul); color:#fff; font-weight:800; font-size:14px; display:flex; align-items:center; justify-content:center; z-index:1; }
+  .nodo-cuerpo { background:var(--gris); border:1px solid var(--borde); border-radius:10px; padding:10px 14px; flex:1; }
+  .nodo-top { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:4px; }
+  .nodo-fecha { font-size:11px; color:var(--muted); font-weight:600; }
+  .nodo-rol { font-size:10px; text-transform:uppercase; letter-spacing:.5px; color:var(--rojo); font-weight:800; background:#fdecec; border-radius:999px; padding:2px 8px; }
+  .nodo-actor { font-size:13px; font-weight:700; color:var(--azul); }
+  .nodo-accion { font-size:12px; font-weight:600; color:var(--texto); margin-top:2px; }
+  .nodo-detalle { font-size:12px; color:var(--muted); margin-top:4px; line-height:1.5; }
+  .conclusion-box { border:2px solid var(--rojo); border-left:6px solid var(--rojo); border-radius:12px; padding:16px; background:#fffafa; }
+  .conclusion-estado { margin-bottom:10px; }
+  .estado { display:inline-block; font-weight:800; font-size:12px; letter-spacing:1px; text-transform:uppercase; padding:5px 14px; border-radius:999px; }
+  .estado.resuelto { background:#16a34a; color:#fff; }
+  .estado.proceso { background:#2563eb; color:#fff; }
+  .conclusion-texto { font-size:13px; line-height:1.6; color:var(--texto); }
+  .firmas { display:flex; gap:40px; padding:30px 24px 36px; }
+  .firma { flex:1; text-align:center; }
+  .firma .linea { border-bottom:1.5px solid var(--texto); height:40px; margin-bottom:8px; }
+  .firma span { font-size:12px; color:var(--muted); }
+  .seccion, .campo, .nodo, .nodo-cuerpo, .timeline, .historico, .conclusion, .conclusion-box, .firmas, .firma, .detalle p, .conclusion-texto { break-inside: avoid; page-break-inside: avoid; }
+  @media print {
+    body { background:#fff; }
+    .reporte-card { box-shadow:none; border:1px solid var(--borde); margin:0 auto 12px; border-radius:0; }
+    .reporte-card, .seccion, .nodo, .conclusion-box, .firmas { box-shadow:none; }
+    .accion-botones, button { display:none !important; }
+  }
+  `;
+
+
+  const exportarReportePDF = (lista: Ticket[]) => {
+    const w = window.open('', '_blank');
+    if (!w) return;
+
+    const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+    const fmtFecha = formatoFecha;
+    const logoFallback = 'data:image/svg+xml,' + encodeURIComponent(
+      `<svg xmlns='http://www.w3.org/2000/svg' width='150' height='60'><rect width='150' height='60' rx='12' fill='#e30613'/><text x='75' y='41' font-family='Arial,sans-serif' font-size='30' font-weight='bold' fill='#ffffff' text-anchor='middle'>AF</text></svg>`
+    ).replace(/'/g, '%27');
+    const emision = new Date().toLocaleDateString('es-PE', { day: '2-digit', month: 'long', year: 'numeric' });
+    const estadoResuelto = (estado: string) => estado === 'Solucionado' || estado === 'Cerrado';
+
+    const portada = lista.length > 1
+      ? `<section class="reporte-card portada"><header class="encabezado"><img class="logo" src="/logo.png" onerror="this.onerror=null;this.src='${logoFallback}'" alt="Alianza Francesa" /><div class="encabezado-info"><div class="ticket-num">Reporte de Soporte TI</div><div class="codigo">Sistema IT Alianza</div></div><div class="fecha-emision">Emitido: ${emision}</div></header><div class="seccion"><h2>Resumen Ejecutivo</h2><div class="grid-datos"><div class="campo"><span>Total de tickets</span><strong>${lista.length}</strong></div><div class="campo"><span>Pendientes</span><strong>${lista.filter((x) => x.estado === 'Pendiente').length}</strong></div><div class="campo"><span>En Proceso</span><strong>${lista.filter((x) => x.estado === 'En Proceso').length}</strong></div><div class="campo"><span>Resueltos</span><strong>${lista.filter((x) => x.estado === 'Solucionado' || x.estado === 'Cerrado').length}</strong></div></div></div></section>`
+      : '';
+
+    const tarjetas = lista.map((t) => {
+      const nodos: { fecha: string; actor: string; rol: string; accion: string; detalle?: string }[] = [];
+      nodos.push({ fecha: t.fecha_creacion, actor: formatoSolicitante(t), rol: 'Solicitante', accion: 'Registro de solicitud', detalle: t.descripcion || 'Sin detalle adicional' });
+      if (t.tecnico_asignado) {
+        nodos.push({ fecha: t.fecha_resolucion || t.fecha_creacion, actor: t.tecnico_asignado, rol: 'Técnico TI', accion: 'Asignación y atención del caso' });
+      }
+      if (t.notas_tecnicas) {
+        nodos.push({ fecha: t.fecha_resolucion || t.fecha_creacion, actor: t.tecnico_asignado || 'Equipo TI', rol: 'Técnico TI', accion: 'Solución técnica aplicada', detalle: t.notas_tecnicas });
+      }
+      if (estadoResuelto(t.estado)) {
+        nodos.push({ fecha: t.fecha_resolucion || t.fecha_creacion, actor: t.tecnico_asignado || 'Equipo TI', rol: 'Técnico TI', accion: 'Caso RESUELTO y cerrado' });
+      }
+      const timeline = nodos.map((n, i) => `
+          <div class="nodo">
+            <div class="marcador">${i + 1}</div>
+            <div class="nodo-cuerpo">
+              <div class="nodo-top"><span class="nodo-fecha">${esc(fmtFecha(n.fecha))}</span><span class="nodo-rol">${esc(n.rol)}</span></div>
+              <div class="nodo-actor">${esc(n.actor)}</div>
+              <div class="nodo-accion">${esc(n.accion)}</div>
+              ${n.detalle ? `<div class="nodo-detalle">${esc(n.detalle)}</div>` : ''}
+            </div>
+          </div>`).join('');
+      const estadoBadge = estadoResuelto(t.estado) ? '<span class="estado resuelto">RESUELTO</span>' : '<span class="estado proceso">EN PROCESO</span>';
+      return `
+      <section class="reporte-card">
+        <header class="encabezado">
+          <img class="logo" src="/logo.png" onerror="this.onerror=null;this.src='${logoFallback}'" alt="Alianza Francesa" />
+          <div class="encabezado-info">
+            <div class="ticket-num">${esc(formatoCorrelativo(t))}</div>
+          </div>
+          <div class="fecha-emision">Emitido: ${emision}</div>
+        </header>
+        <div class="seccion datos">
+          <h2>Datos del Requerimiento</h2>
+          <div class="grid-datos">
+            <div class="campo"><span>Sede de origen</span><strong>${esc(t.sede || '—')}</strong></div>
+            <div class="campo"><span>Tipo de colaborador</span><strong>${esc(t.tipo_colaborador || '—')}</strong></div>
+            <div class="campo"><span>Prioridad</span><strong>${esc(t.prioridad || '—')}</strong></div>
+            <div class="campo"><span>Usuario afectado</span><strong>${esc(formatoSolicitante(t))}</strong></div>
+            <div class="campo ancho"><span>Categoría del servicio</span><strong>${esc(t.tipo_requerimiento || '—')}</strong></div>
+          </div>
+        </div>
+        <div class="seccion detalle">
+          <h2>Detalle del Requerimiento</h2>
+          <p>${esc(t.descripcion || 'Sin descripción registrada.')}</p>
+        </div>
+        <div class="seccion historico">
+          <h2>Histórico y Línea de Tiempo</h2>
+          <div class="timeline">${timeline}</div>
+        </div>
+        <div class="seccion conclusion">
+          <h2>Conclusión y Solución Aplicada</h2>
+          <div class="conclusion-box">
+            <div class="conclusion-estado">${estadoBadge}</div>
+            <p class="conclusion-texto">${esc(t.notas_tecnicas || (estadoResuelto(t.estado) ? 'Caso atendido y resuelto por el equipo de TI.' : 'Caso en atención por el equipo de soporte TI.'))}</p>
+          </div>
+        </div>
+        <div class="firmas">
+          <div class="firma"><div class="linea"></div><span>Firma del Técnico TI</span></div>
+          <div class="firma"><div class="linea"></div><span>Conformidad del Usuario</span></div>
+        </div>
+      </section>`;
+    }).join('');
+
+    const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte de Tickets TI — Alianza Francesa</title><style>${REPORTE_CSS}</style></head><body>${portada}${tarjetas}</body></html>`;
+    w.document.write(html);
+    w.document.close();
+    w.print();
+  };
+
+  const exportarPDF = () => exportarReportePDF(ticketsFiltrados);
+  const exportarTicketPDF = (t: Ticket) => exportarReportePDF([t]);
 
   return (
     <div className="min-h-screen bg-[#FDFBFB] text-slate-800 flex font-sans">
+      {/* Overlay móvil del menú */}
+      {menuAbierto && (
+        <div className="fixed inset-0 bg-black/50 z-30 md:hidden" onClick={() => setMenuAbierto(false)} />
+      )}
+
       {/* Sidebar Rojo Institucional */}
-      <aside className="w-72 bg-[#ED1C24] text-white p-6 flex flex-col justify-between hidden md:flex shadow-2xl">
+      <aside className={`w-72 bg-[#ED1C24] text-white p-6 flex flex-col justify-between shadow-2xl fixed inset-y-0 left-0 z-40 transition-transform duration-200 md:static md:translate-x-0 ${menuAbierto ? 'translate-x-0' : '-translate-x-full'}`}>
         <div>
+          <button
+            onClick={() => setMenuAbierto(false)}
+            className="md:hidden w-full flex justify-end mb-2 text-white/80 hover:text-white"
+          >
+            <X className="w-5 h-5" />
+          </button>
           {/* Logo en la cabecera del menú lateral */}
           <div className="flex flex-col items-center text-center gap-3 mb-8 pb-6 border-b border-white/20">
             <div className="bg-white px-6 py-4 rounded-3xl shadow-lg flex items-center justify-center w-full">
@@ -436,7 +912,7 @@ function MainApp() {
                   : 'text-white hover:bg-white/10'
               }`}
             >
-              <Clock className="w-4 h-4" /> Mis Solicitudes
+              <Clock className="w-4 h-4" /> {isTI ? 'Bandeja de Tickets IT' : 'Mis Solicitudes'}
             </button>
 
             {isTI && (
@@ -449,6 +925,19 @@ function MainApp() {
                 }`}
               >
                 <LayoutDashboard className="w-4 h-4" /> Dashboard IT
+              </button>
+            )}
+
+            {isTI && (
+              <button
+                onClick={() => setActiveTab('entrenamiento')}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'entrenamiento' 
+                    ? 'bg-white text-[#ED1C24] shadow-lg' 
+                    : 'text-white hover:bg-white/10'
+                }`}
+              >
+                <BookOpen className="w-4 h-4" /> Entrenamiento IA
               </button>
             )}
 
@@ -500,7 +989,13 @@ function MainApp() {
         </div>
       </aside>
 
-      <main className="flex-1 p-8 overflow-y-auto">
+      <main className="flex-1 p-4 md:p-8 overflow-y-auto">
+        <div className="md:hidden flex items-center justify-between mb-4">
+          <button onClick={() => setMenuAbierto(true)} className="p-2 bg-white border border-slate-200 rounded-lg shadow-sm">
+            <Menu className="w-5 h-5 text-slate-700" />
+          </button>
+          <span className="text-sm font-bold text-slate-800">Sistema IT Alianza</span>
+        </div>
         {activeTab === 'crear' && (
           <div className="max-w-4xl mx-auto space-y-6">
             <div className="bg-gradient-to-r from-[#ED1C24] to-[#C41219] rounded-2xl p-8 text-white shadow-xl relative overflow-hidden">
@@ -605,15 +1100,38 @@ function MainApp() {
 
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            <div>
-              <h1 className="text-2xl font-bold text-slate-900">Panel de Gestión Informática</h1>
-              <p className="text-slate-500 text-sm">Monitoreo de atención y estado de requerimientos.</p>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div>
+                <h1 className="text-2xl font-bold text-slate-900">Panel de Gestión Informática</h1>
+                <p className="text-slate-500 text-sm">Monitoreo de atención y estado de requerimientos.</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={exportarCSV} className="px-4 py-2 rounded-xl bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78]">Exportar Reporte Excel</button>
+                <button onClick={exportarPDF} className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219]">Exportar PDF</button>
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap gap-3 items-center">
+              <select value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs">
+                <option value="">Todas las sedes</option>
+                {sedes.map((s) => <option key={s.id} value={s.nombre}>{s.nombre}</option>)}
+              </select>
+              <select value={filtroTipoColab} onChange={(e) => setFiltroTipoColab(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs">
+                <option value="">Todos los colaboradores</option>
+                <option>Administrativo</option><option>Docente</option>
+              </select>
+              <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs">
+                <option value="">Todos los estados</option>
+                <option>Pendiente</option><option>En Proceso</option><option>Solucionado</option><option>Cerrado</option>
+              </select>
+              <input type="date" value={filtroDesde} onChange={(e) => setFiltroDesde(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs" />
+              <input type="date" value={filtroHasta} onChange={(e) => setFiltroHasta(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs" />
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
               <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm border-l-4 border-l-[#ED1C24]">
                 <p className="text-xs font-bold text-slate-500 uppercase">Total Tickets</p>
-                <p className="text-3xl font-extrabold text-slate-900 mt-1">{tickets.length}</p>
+                <p className="text-3xl font-extrabold text-slate-900 mt-1">{ticketsFiltrados.length}</p>
               </div>
               <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm border-l-4 border-l-amber-500">
                 <p className="text-xs font-bold text-amber-600 uppercase">Pendientes</p>
@@ -624,8 +1142,12 @@ function MainApp() {
                 <p className="text-3xl font-extrabold text-sky-600 mt-1">{enProceso}</p>
               </div>
               <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm border-l-4 border-l-emerald-500">
-                <p className="text-xs font-bold text-emerald-600 uppercase">Solucionados</p>
+                <p className="text-xs font-bold text-emerald-600 uppercase">Resueltos</p>
                 <p className="text-3xl font-extrabold text-emerald-600 mt-1">{solucionados}</p>
+              </div>
+              <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm border-l-4 border-l-[#002395]">
+                <p className="text-xs font-bold text-[#002395] uppercase">Promedio Atención</p>
+                <p className="text-2xl font-extrabold text-slate-900 mt-1">{promedioAtencion}</p>
               </div>
             </div>
 
@@ -634,12 +1156,12 @@ function MainApp() {
                 <h3 className="font-bold text-slate-800">Solicitudes Ingresadas</h3>
               </div>
               <div className="divide-y divide-slate-100">
-                {tickets.map((t) => (
+                {ticketsFiltrados.map((t) => (
                   <div key={t.id} className="p-6 hover:bg-slate-50/80 transition-colors flex flex-col gap-4">
                     <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                       <div className="space-y-1">
                         <div className="flex items-center gap-3 flex-wrap">
-                          <span className="text-xs font-mono font-bold text-[#ED1C24]">#{t.id}</span>
+                          <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
                           <h4 className="font-bold text-slate-900">{t.tipo_requerimiento}</h4>
                           <span className={`${estadoBadgeClasses(t.estado)} text-[10px]`}>
                             {t.estado}
@@ -647,7 +1169,7 @@ function MainApp() {
                           {t.sede && <span className="text-[10px] bg-red-50 text-red-600 font-semibold px-2 py-0.5 rounded-full">{t.sede}</span>}
                         </div>
                         <p className="text-xs text-slate-600">{t.descripcion}</p>
-                        <p className="text-[11px] text-slate-400">Solicitante: {t.solicitante_email} • {t.fecha_creacion}</p>
+                        <p className="text-[11px] text-slate-400">Solicitante: {formatoSolicitante(t)} • {formatoFecha(t.fecha_creacion)}</p>
                         {t.notas_tecnicas && (
                           <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-2 mt-1">
                             <span className="font-bold">Nota técnica:</span> {t.notas_tecnicas}
@@ -695,6 +1217,26 @@ function MainApp() {
                         </button>
                       </div>
                     )}
+                    {isTI && (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <select
+                          value={t.tecnico_asignado_id || ''}
+                          onChange={(e) => handleAsignarTecnico(t.id, e.target.value)}
+                          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                        >
+                          <option value="">Asignar Técnico</option>
+                          {tecnicos.map((tc) => (
+                            <option key={tc.id} value={tc.id}>{tc.nombre}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => handleWhatsApp(t)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
+                        >
+                          Notificar WhatsApp
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -704,12 +1246,59 @@ function MainApp() {
 
         {activeTab === 'mis-tickets' && (
           <div className="max-w-4xl mx-auto space-y-4">
-            <h1 className="text-2xl font-bold text-slate-900 mb-6">Mis Solicitudes</h1>
-            {tickets.filter(t => t.solicitante_email === user?.email).map((t) => (
+            <h1 className="text-2xl font-bold text-slate-900 mb-6">{isTI ? 'Bandeja de Tickets IT' : 'Mis Solicitudes'}</h1>
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-2">
+              <Search className="w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={filtroBusqueda}
+                onChange={(e) => setFiltroBusqueda(e.target.value)}
+                placeholder={isTI ? 'Buscar por correlativo (AF-2026-XXXX), ID, usuario, sede o categoría…' : 'Buscar por código de ticket o palabra clave…'}
+                className="flex-1 bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#ED1C24]"
+              />
+              {filtroBusqueda && (
+                <button onClick={() => setFiltroBusqueda('')} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-500 text-xs font-semibold hover:bg-slate-200">Limpiar</button>
+              )}
+            </div>
+            {!isTI && (
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm border-l-4 border-l-[#002395]">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase">Total Solicitudes</p>
+                  <p className="text-2xl font-extrabold text-[#002395] mt-1">{misTicketsTotal}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm border-l-4 border-l-sky-500">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase">En Proceso</p>
+                  <p className="text-2xl font-extrabold text-sky-600 mt-1">{misTicketsEnProceso}</p>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm border-l-4 border-l-emerald-500">
+                  <p className="text-[11px] font-bold text-slate-500 uppercase">Resueltos</p>
+                  <p className="text-2xl font-extrabold text-emerald-600 mt-1">{misTicketsResueltos}</p>
+                </div>
+              </div>
+            )}
+            {isTI && (
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap gap-3 items-center">
+                <select value={filtroSede} onChange={(e) => setFiltroSede(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs">
+                  <option value="">Todas las sedes</option>
+                  {sedes.map((s) => <option key={s.id} value={s.nombre}>{s.nombre}</option>)}
+                </select>
+                <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs">
+                  <option value="">Todos los estados</option>
+                  <option>Pendiente</option><option>En Proceso</option><option>Solucionado</option><option>Cerrado</option>
+                </select>
+                <select value={filtroPrioridad} onChange={(e) => setFiltroPrioridad(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs">
+                  <option value="">Todas las prioridades</option>
+                  <option>Alta</option><option>Media</option><option>Baja</option>
+                </select>
+                <input type="date" value={filtroDesde} onChange={(e) => setFiltroDesde(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs" />
+                <input type="date" value={filtroHasta} onChange={(e) => setFiltroHasta(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs" />
+              </div>
+            )}
+            {(isTI ? ticketsFiltrados : misTicketsFiltrados).map((t) => (
               <div key={t.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
                 <div className="flex justify-between items-start mb-2">
                   <div>
-                    <span className="text-xs font-mono font-bold text-[#ED1C24]">Ticket #{t.id}</span>
+                    <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
                     <h3 className="font-bold text-slate-900 text-base">{t.tipo_requerimiento}</h3>
                   </div>
                   <span className={`${estadoBadgeClasses(t.estado)} text-xs`}>
@@ -717,17 +1306,57 @@ function MainApp() {
                   </span>
                 </div>
                 <p className="text-slate-600 text-sm mb-4">{t.descripcion}</p>
+                <TicketStepper estado={t.estado} />
                 {t.notas_tecnicas && (
                   <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-3 mb-3">
                     <span className="font-bold">Nota técnica:</span> {t.notas_tecnicas}
                   </p>
                 )}
-                <div className="text-xs text-slate-400 flex justify-between pt-4 border-t border-slate-100">
-                  <span>Sede: {t.sede || '—'} • {t.fecha_creacion}</span>
-                  <span>Técnico: {t.tecnico_asignado || '—'}</span>
+                <div className="flex items-center justify-between gap-3 pt-4 border-t border-slate-100">
+                  <div className="text-xs text-slate-400">
+                    <span>Sede: {t.sede || '—'} • {formatoFecha(t.fecha_creacion)}</span>
+                    <span className="ml-3">Técnico: {t.tecnico_asignado || '—'}</span>
+                  </div>
+                  <button onClick={() => abrirDetalle(t)} className="px-3 py-1.5 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] whitespace-nowrap">
+                    Ver detalle
+                  </button>
                 </div>
+                {isTI && (
+                  <div className="flex items-center gap-2 flex-wrap mt-3">
+                    <button onClick={() => handleUpdateStatus(t.id, 'En Proceso')} className="px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-200 hover:bg-sky-100">En Proceso</button>
+                    <button onClick={() => handleUpdateStatus(t.id, 'Solucionado')} className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-200 hover:bg-emerald-100">Solucionado</button>
+                    <button onClick={() => handleUpdateStatus(t.id, 'Cerrado')} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200">Cerrado</button>
+                    <select
+                      value={t.tecnico_asignado_id || ''}
+                      onChange={(e) => handleAsignarTecnico(t.id, e.target.value)}
+                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
+                    >
+                      <option value="">Asignar Técnico</option>
+                      {tecnicos.map((tc) => (
+                        <option key={tc.id} value={tc.id}>{tc.nombre}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={() => handleWhatsApp(t)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
+                    >
+                      Notificar WhatsApp
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
+            {(isTI ? ticketsFiltrados : misTicketsFiltrados).length === 0 && (
+              <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-10 shadow-sm flex flex-col items-center justify-center text-center">
+                <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                  <SearchX className="w-7 h-7 text-slate-400" />
+                </div>
+                <h3 className="font-bold text-slate-700">Sin resultados</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  {filtroBusqueda ? 'No se encontraron tickets para tu búsqueda.' : 'Aún no tienes solicitudes registradas.'}
+                </p>
+              </div>
+            )}
           </div>
         )}
         {activeTab === 'usuarios' && isAdmin && (
@@ -858,7 +1487,259 @@ function MainApp() {
           </div>
         )}
 
+        {activeTab === 'entrenamiento' && isTI && (
+          <div className="max-w-4xl mx-auto space-y-6">
+            <h1 className="text-2xl font-bold text-slate-900">Entrenamiento / Base de Conocimiento IA</h1>
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-3">
+              <h3 className="font-bold text-slate-800 text-sm">Registrar nueva solución rápida</h3>
+              <input
+                value={nuevaSolucion.titulo}
+                onChange={(e) => setNuevaSolucion({ ...nuevaSolucion, titulo: e.target.value })}
+                placeholder="Título (ej: No hay conexión VPN)"
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm"
+              />
+              <input
+                value={nuevaSolucion.palabras_clave}
+                onChange={(e) => setNuevaSolucion({ ...nuevaSolucion, palabras_clave: e.target.value })}
+                placeholder="Problema frecuente / palabras clave (separadas por coma)"
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm"
+              />
+              <select
+                value={nuevaSolucion.categoria}
+                onChange={(e) => setNuevaSolucion({ ...nuevaSolucion, categoria: e.target.value })}
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm"
+              >
+                <option>Impresoras</option><option>Redes</option><option>Equipos</option><option>Software</option><option>Contraseñas</option><option>Otros</option>
+              </select>
+              <textarea
+                rows={4}
+                value={nuevaSolucion.pasos}
+                onChange={(e) => setNuevaSolucion({ ...nuevaSolucion, pasos: e.target.value })}
+                placeholder="Solución paso a paso (una línea por paso, ej: 1. ... 2. ...)"
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-sm"
+              />
+              <button
+                onClick={handleCreateSolucion}
+                className="px-5 py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-semibold hover:bg-[#C41219]"
+              >
+                Guardar Solución
+              </button>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+              <div className="divide-y divide-slate-100">
+                {soluciones.map((s) => (
+                  <div key={s.id} className="p-4 flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold text-slate-800 text-sm">{s.titulo}</p>
+                        <span className="text-[10px] bg-blue-50 text-blue-600 font-semibold px-2 py-0.5 rounded-full">{s.categoria}</span>
+                        {!s.activo && <span className="text-[10px] bg-slate-100 text-slate-500 font-semibold px-2 py-0.5 rounded-full">Inactiva</span>}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1 truncate">{s.palabras_clave}</p>
+                      <p className="text-xs text-slate-600 mt-1 whitespace-pre-line">{s.pasos}</p>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button
+                        onClick={() => handleToggleSolucion(s.id, !s.activo)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${s.activo ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}
+                      >
+                        {s.activo ? 'Desactivar' : 'Activar'}
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSolucion(s.id)}
+                        className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-xs font-semibold border border-red-200 hover:bg-red-100"
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
+
+      {ticketDetalle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={cerrarDetalle}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6 border-b border-slate-100 flex items-start justify-between gap-4 sticky top-0 bg-white z-10">
+              <div>
+                <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(ticketDetalle)}</span>
+                <h2 className="text-xl font-extrabold text-slate-900">{ticketDetalle.tipo_requerimiento}</h2>
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
+                  <span className={`${estadoBadgeClasses(ticketDetalle.estado)} text-[10px]`}>{ticketDetalle.estado}</span>
+                  {ticketDetalle.prioridad && <span className="text-[10px] bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full">Prioridad: {ticketDetalle.prioridad}</span>}
+                </div>
+              </div>
+              <button onClick={cerrarDetalle} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              <TicketStepper estado={ticketDetalle.estado} />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Solicitante</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{formatoSolicitante(ticketDetalle)}</p></div>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Sede de origen</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.sede || '—'}</p></div>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Tipo de colaborador</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.tipo_colaborador || '—'}</p></div>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Categoría</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.tipo_requerimiento}</p></div>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Técnico asignado</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.tecnico_asignado || 'Sin asignar'}</p></div>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Fecha de creación</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{formatoFecha(ticketDetalle.fecha_creacion)}</p></div>
+              </div>
+
+              <div>
+                <p className="text-xs text-slate-500 uppercase font-bold mb-1">Descripción</p>
+                <p className="text-sm text-slate-700 whitespace-pre-line bg-white border border-slate-200 rounded-xl p-4">{ticketDetalle.descripcion || 'Sin descripción.'}</p>
+              </div>
+
+              {ticketDetalle.notas_tecnicas && (
+                <div>
+                  <p className="text-xs text-slate-500 uppercase font-bold mb-1">Nota técnica</p>
+                  <p className="text-sm text-slate-700 bg-amber-50 border border-amber-200 rounded-xl p-4">{ticketDetalle.notas_tecnicas}</p>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100">
+                <button onClick={() => exportarTicketPDF(ticketDetalle)} className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] flex items-center gap-2">
+                  <BookOpen className="w-4 h-4" /> Descargar PDF
+                </button>
+                {isTI && (
+                  <>
+                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'En Proceso')} className="px-3 py-2 rounded-lg bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-200 hover:bg-sky-100">En Proceso</button>
+                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'Solucionado')} className="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-200 hover:bg-emerald-100">Solucionado</button>
+                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'Cerrado')} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200">Cerrado</button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {codigoSeguimiento && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setCodigoSeguimiento(null)}>
+          <div className="bg-white rounded-2xl p-8 shadow-2xl max-w-md w-full text-center" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto mb-4 w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center">
+              <CheckCircle2 className="w-8 h-8 text-emerald-600" />
+            </div>
+            <h2 className="text-xl font-extrabold text-slate-900 mb-2">Solicitud Registrada Exitosamente</h2>
+            <p className="text-sm text-slate-500 mb-4">Tu código de seguimiento es:</p>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl py-3 px-6 inline-block mb-6">
+              <span className="text-2xl font-mono font-extrabold text-[#ED1C24] tracking-wider">{codigoSeguimiento}</span>
+            </div>
+            <button onClick={() => setCodigoSeguimiento(null)} className="w-full py-3 rounded-xl bg-[#ED1C24] text-white font-bold hover:bg-[#C41219]">
+              Entendido
+            </button>
+          </div>
+        </div>
+      )}
+
+      {asistenteAbierto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setAsistenteAbierto(false)}>
+          <div className="bg-white rounded-2xl p-6 shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-extrabold text-slate-900 flex items-center gap-2"><Bot className="w-5 h-5 text-[#ED1C24]" /> Asistente Virtual TI</h2>
+              <button onClick={() => setAsistenteAbierto(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <p className="text-sm text-slate-500 mb-3">Describe la falla y te sugerimos una solución paso a paso.</p>
+            <textarea
+              rows={3}
+              value={asistenteConsulta}
+              onChange={(e) => setAsistenteConsulta(e.target.value)}
+              placeholder="Ej: la impresora no imprime, no tengo wifi, olvidé mi contraseña..."
+              className="w-full bg-slate-50 border border-slate-300 rounded-xl p-3 text-sm focus:outline-none focus:border-[#ED1C24] mb-3"
+            />
+            <button
+              onClick={consultarAsistente}
+              disabled={asistenteLoading}
+              className="w-full bg-[#002395] hover:bg-[#001d78] text-white font-semibold py-3 rounded-xl mb-4 disabled:opacity-60"
+            >
+              {asistenteLoading ? 'Consultando...' : 'Consultar Solución'}
+            </button>
+
+            {asistenteResultado.length > 0 ? (
+              <div className="space-y-4">
+                {asistenteResultado.map((s, i) => (
+                  <div key={i} className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                    <p className="font-bold text-slate-800 text-sm mb-1">{s.titulo}</p>
+                    <ol className="list-decimal pl-5 space-y-1">
+                      {(s.pasos || []).map((p: string, j: number) => (
+                        <li key={j} className="text-xs text-slate-600">{p}</li>
+                      ))}
+                    </ol>
+                  </div>
+                ))}
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <button onClick={() => setAsistenteAbierto(false)} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl">¡Solucionado!</button>
+                  <button onClick={() => setAsistenteAbierto(false)} className="flex-1 bg-[#ED1C24] hover:bg-[#C41219] text-white font-bold py-3 rounded-xl">Continuar y Crear Ticket</button>
+                </div>
+              </div>
+            ) : (
+              asistenteLoading ? (
+                <p className="text-sm text-slate-400 text-center py-4">Buscando solución...</p>
+              ) : null
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Chat flotante global (Asistente de IA) */}
+      <button
+        onClick={() => setChatAbierto((v) => !v)}
+        className="fixed bottom-5 right-5 z-50 w-14 h-14 rounded-full bg-[#ED1C24] text-white shadow-2xl flex items-center justify-center hover:bg-[#C41219] transition-all"
+        aria-label="Asistente de IA"
+      >
+        {chatAbierto ? <X className="w-6 h-6" /> : <Bot className="w-6 h-6" />}
+      </button>
+
+      {chatAbierto && (
+        <div className="fixed bottom-24 right-5 z-50 w-[92vw] max-w-sm bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col" style={{ height: '480px' }}>
+          <div className="bg-[#ED1C24] text-white px-4 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bot className="w-5 h-5" />
+              <span className="font-bold text-sm">Asistente Virtual TI</span>
+            </div>
+            <button onClick={() => setChatAbierto(false)} className="text-white/80 hover:text-white"><X className="w-5 h-5" /></button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#FDFBFB]">
+            <div className="bg-slate-100 text-slate-700 text-xs rounded-xl p-3 whitespace-pre-line">
+              Hola 👋 Soy el asistente virtual. Describe tu problema y te sugeriré una solución.
+            </div>
+            {chatMensajes.map((m, i) => (
+              <div key={i} className={`text-xs rounded-xl p-3 whitespace-pre-line ${m.rol === 'user' ? 'bg-[#ED1C24] text-white ml-auto max-w-[80%]' : 'bg-slate-100 text-slate-700 max-w-[85%]'}`}>
+                {m.texto}
+              </div>
+            ))}
+            {chatLoading && <div className="text-xs text-slate-400">Escribiendo...</div>}
+          </div>
+
+          <div className="p-3 border-t border-slate-200 bg-white">
+            <p className="text-[11px] text-slate-500 mb-2">💡 Nota: Si estos pasos no resuelven tu inconveniente, puedes generar un ticket. El equipo de TI se comunicará contigo o acudirá a tu oficina/sede para brindarte el soporte necesario.</p>
+            <div className="flex gap-2">
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') enviarChat(); }}
+                placeholder="Escribe tu problema..."
+                className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#ED1C24]"
+              />
+              <button onClick={enviarChat} disabled={chatLoading} className="px-3 py-2 rounded-xl bg-[#002395] text-white text-sm font-semibold hover:bg-[#001d78] disabled:opacity-60">
+                Enviar
+              </button>
+            </div>
+            <button
+              onClick={irAFormulario}
+              className="mt-2 w-full py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-bold hover:bg-[#C41219]"
+            >
+              Ir a Formulario de Ticket
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

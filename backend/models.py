@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -53,6 +53,7 @@ class Usuario(Base):
         ForeignKey("sedes.id", ondelete="SET NULL"), nullable=True, index=True
     )
     cargo_ti: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    telefono_whatsapp: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
 
     # Relación (N -> 1)
     sede: Mapped[Optional["Sede"]] = relationship(back_populates="usuarios")
@@ -68,6 +69,7 @@ class Ticket(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     solicitante_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     tipo_requerimiento: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     prioridad: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     descripcion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -75,9 +77,18 @@ class Ticket(Base):
         String(30), nullable=False, default="Pendiente", index=True
     )
     tecnico_asignado: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    tecnico_asignado_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     notas_tecnicas: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fecha_creacion: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=datetime.now, index=True
+    )
+    fecha_resolucion: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
+    codigo: Mapped[Optional[str]] = mapped_column(
+        String(30), nullable=True, unique=True, index=True
     )
     # Campo legacy (texto libre) conservado por compatibilidad con datos previos.
     sede: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
@@ -91,3 +102,19 @@ class Ticket(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Ticket id={self.id} estado={self.estado!r}>"
+
+
+class SolucionFrecuente(Base):
+    """Soluciones frecuentes para el asistente virtual de primer nivel."""
+
+    __tablename__ = "soluciones_frecuentes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    categoria: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    palabras_clave: Mapped[str] = mapped_column(String(255), nullable=False)
+    titulo: Mapped[str] = mapped_column(String(255), nullable=False)
+    pasos: Mapped[str] = mapped_column(Text, nullable=False)
+    activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<SolucionFrecuente id={self.id} titulo={self.titulo!r}>"

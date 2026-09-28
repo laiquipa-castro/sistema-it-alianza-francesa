@@ -22,10 +22,21 @@ def _csv(value: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # CORS y URLs de despliegue
 # ---------------------------------------------------------------------------
+# URL pública del frontend (Vercel), usada para habilitar CORS en producción.
+FRONTEND_URL: str = os.getenv("FRONTEND_URL", "").rstrip("/")
+
 # Orígenes permitidos por el frontend (separados por coma).
 CORS_ORIGINS: list[str] = _csv(
     os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 )
+
+# Garantizar que siempre se permita el frontend de producción (FRONTEND_URL) y
+# "*", independientemente de lo que defina CORS_ORIGINS, para evitar bloqueos
+# al conectar la app web con el servidor.
+if FRONTEND_URL and FRONTEND_URL not in CORS_ORIGINS:
+    CORS_ORIGINS.append(FRONTEND_URL)
+if "*" not in CORS_ORIGINS:
+    CORS_ORIGINS.append("*")
 
 # URL pública del portal (usada para enlaces dentro de los correos).
 APP_URL: str = os.getenv("APP_URL", "http://localhost:3000").rstrip("/")
@@ -57,3 +68,21 @@ TI_TEAM_EMAILS: list[str] = [
     "j.barbaran@alianzafrancesa.org.pe",
     "l.aiquipa-castro@alianzafrancesa.org.pe",
 ]
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp (alertas automáticas de nuevos tickets)
+# ---------------------------------------------------------------------------
+# URL base del gateway de WhatsApp (ej. CallMeBot: https://api.callmebot.com/whatsapp.php).
+# Si está vacío, el envío se omite de forma segura (sin bloquear la creación del ticket).
+WHATSAPP_API_URL: str = os.getenv("WHATSAPP_API_URL", "")
+WHATSAPP_API_KEY: str = os.getenv("WHATSAPP_API_KEY", "")
+WHATSAPP_TECH_PHONE: str = os.getenv("WHATSAPP_TECH_PHONE", "+51986068159")
+
+
+# ---------------------------------------------------------------------------
+# IA / Asistente virtual (DeepSeek)
+# ---------------------------------------------------------------------------
+# Clave opcional para consultar DeepSeek cuando no hay solución frecuente local.
+DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
