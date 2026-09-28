@@ -8,6 +8,7 @@ import {
   PlusCircle, LayoutDashboard, LogOut,
   Send, Menu, X, Bot, BookOpen, SearchX, Search
 } from 'lucide-react';
+import BackToHome from '@/components/BackToHome';
 
 const GOOGLE_CLIENT_ID = "274739568755-s1kq1q8orh7e3edneubiahgimtrgvrgi.apps.googleusercontent.com";
 
@@ -665,6 +666,20 @@ function MainApp() {
   const isAdmin = user?.rol === 'ADMIN_TI';
   const isTI = !!user && TI_ROLES.includes(user.rol || '');
 
+  // Pestaña de inicio según el rol: el equipo TI opera desde el Dashboard,
+  // mientras que el usuario corporativo lo hace desde el formulario de solicitud.
+  const homeTab = isTI ? 'dashboard' : 'crear';
+
+  // Navegación global "Volver al Inicio": cierra cualquier detalle abierto y
+  // regresa a la pestaña de inicio del rol actual, restableciendo la URL a "/".
+  const volverAlInicio = () => {
+    setTicketDetalle(null);
+    setActiveTab(homeTab);
+    if (typeof window !== 'undefined') {
+      window.history.replaceState({}, '', '/');
+    }
+  };
+
   const coincideBusqueda = (t: Ticket) => {
     const q = filtroBusqueda.trim().toLowerCase();
     if (!q) return true;
@@ -1101,9 +1116,12 @@ function MainApp() {
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <div>
-                <h1 className="text-2xl font-bold text-slate-900">Panel de Gestión Informática</h1>
-                <p className="text-slate-500 text-sm">Monitoreo de atención y estado de requerimientos.</p>
+              <div className="flex items-center gap-3 flex-wrap">
+                <BackToHome onClick={volverAlInicio} />
+                <div>
+                  <h1 className="text-2xl font-bold text-slate-900">Panel de Gestión Informática</h1>
+                  <p className="text-slate-500 text-sm">Monitoreo de atención y estado de requerimientos.</p>
+                </div>
               </div>
               <div className="flex gap-2">
                 <button onClick={exportarCSV} className="px-4 py-2 rounded-xl bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78]">Exportar Reporte Excel</button>
@@ -1246,7 +1264,10 @@ function MainApp() {
 
         {activeTab === 'mis-tickets' && (
           <div className="max-w-4xl mx-auto space-y-4">
-            <h1 className="text-2xl font-bold text-slate-900 mb-6">{isTI ? 'Bandeja de Tickets IT' : 'Mis Solicitudes'}</h1>
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
+              <h1 className="text-2xl font-bold text-slate-900">{isTI ? 'Bandeja de Tickets IT' : 'Mis Solicitudes'}</h1>
+              <BackToHome onClick={volverAlInicio} />
+            </div>
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-2">
               <Search className="w-4 h-4 text-slate-400" />
               <input
@@ -1361,7 +1382,10 @@ function MainApp() {
         )}
         {activeTab === 'usuarios' && isAdmin && (
           <div className="max-w-5xl mx-auto space-y-4">
-            <h1 className="text-2xl font-bold text-slate-900">Gestión de Usuarios</h1>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h1 className="text-2xl font-bold text-slate-900">Gestión de Usuarios</h1>
+              <BackToHome onClick={volverAlInicio} />
+            </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row gap-3">
               <input
@@ -1440,7 +1464,10 @@ function MainApp() {
 
         {activeTab === 'sedes' && isAdmin && (
           <div className="max-w-3xl mx-auto space-y-4">
-            <h1 className="text-2xl font-bold text-slate-900">Gestión de Sedes</h1>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h1 className="text-2xl font-bold text-slate-900">Gestión de Sedes</h1>
+              <BackToHome onClick={volverAlInicio} />
+            </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row gap-3">
               <input
@@ -1489,7 +1516,10 @@ function MainApp() {
 
         {activeTab === 'entrenamiento' && isTI && (
           <div className="max-w-4xl mx-auto space-y-6">
-            <h1 className="text-2xl font-bold text-slate-900">Entrenamiento / Base de Conocimiento IA</h1>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h1 className="text-2xl font-bold text-slate-900">Entrenamiento / Base de Conocimiento IA</h1>
+              <BackToHome onClick={volverAlInicio} />
+            </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-3">
               <h3 className="font-bold text-slate-800 text-sm">Registrar nueva solución rápida</h3>
@@ -1603,6 +1633,7 @@ function MainApp() {
               )}
 
               <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100">
+                <BackToHome onClick={volverAlInicio} />
                 <button onClick={() => exportarTicketPDF(ticketDetalle)} className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] flex items-center gap-2">
                   <BookOpen className="w-4 h-4" /> Descargar PDF
                 </button>

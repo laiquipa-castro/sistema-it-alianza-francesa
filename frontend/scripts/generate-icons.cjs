@@ -4,10 +4,9 @@ const path = require('path');
 const src = path.join(__dirname, '..', 'public', 'logo.png');
 const outDir = path.join(__dirname, '..', 'public');
 
-const RED = { r: 227, g: 6, b: 19, alpha: 1 }; // #e30613
 const WHITE = { r: 255, g: 255, b: 255, alpha: 1 };
 
-// Logo contenido dentro de un cuadrado, fondo transparente.
+// Logo contenido dentro de un cuadrado, fondo transparente (favicon).
 async function makeContained(size, name) {
   const out = path.join(outDir, name);
   await sharp(src)
@@ -41,14 +40,15 @@ async function makePadded(size, name, background, paddingRatio) {
 }
 
 (async () => {
-  // Iconos estándar (purpose: any)
-  await makeContained(192, 'icon-192.png');
-  await makeContained(512, 'icon-512.png');
+  // Iconos "any maskable": logo rojo + texto negro sobre fondo blanco sólido.
+  // Padding del 22% para que el logo quede dentro de la zona segura de las
+  // máscaras circulares/cuadradas de Android (sin cortarse).
+  await makePadded(192, 'icon-192.png', WHITE, 0.22);
+  await makePadded(512, 'icon-512.png', WHITE, 0.22);
 
   // Apple touch icon (180x180, opaco, fondo blanco)
   await makePadded(180, 'apple-touch-icon.png', WHITE, 0.12);
 
-  // Iconos maskable (fondo rojo + padding del 20%)
-  await makePadded(192, 'icon-maskable-192.png', RED, 0.2);
-  await makePadded(512, 'icon-maskable-512.png', RED, 0.2);
+  // Favicon (fondo transparente, sin padding) para la pestaña del navegador.
+  await makeContained(48, 'favicon.png');
 })();
