@@ -6,7 +6,7 @@ import { jwtDecode } from 'jwt-decode';
 import { 
   ShieldAlert, CheckCircle2, Clock, 
   PlusCircle, LayoutDashboard, LogOut,
-  Send, Menu, X, Bot, BookOpen, SearchX, Search
+  Send, Menu, X, Bot, BookOpen, SearchX, Search, Pencil
 } from 'lucide-react';
 import BackToHome from '@/components/BackToHome';
 
@@ -224,6 +224,10 @@ function MainApp() {
   const [successMsg, setSuccessMsg] = useState(false);
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [sedes, setSedes] = useState<any[]>([]);
+  const [editandoUsuario, setEditandoUsuario] = useState<any | null>(null);
+  const [editForm, setEditForm] = useState({ nombre: '', email: '', rol: 'Usuario', estado: 'Activo', tipo_colaborador: '', sede_id: '' });
+  const [editGuardando, setEditGuardando] = useState(false);
+  const [editError, setEditError] = useState('');
   const [notasDraft, setNotasDraft] = useState<Record<number, string>>({});
   const [codigoSeguimiento, setCodigoSeguimiento] = useState<string | null>(null);
   const [ticketDetalle, setTicketDetalle] = useState<Ticket | null>(null);
@@ -585,6 +589,57 @@ function MainApp() {
     await fetchUsuarios();
   };
 
+  const abrirEdicion = (u: any) => {
+    setEditandoUsuario(u);
+    setEditForm({
+      nombre: u.nombre || '',
+      email: u.email || '',
+      rol: u.rol || 'Usuario',
+      estado: u.estado || 'Activo',
+      tipo_colaborador: u.tipo_colaborador || '',
+      sede_id: u.sede_id != null ? String(u.sede_id) : '',
+    });
+    setEditError('');
+  };
+
+  const handleUserSave = async () => {
+    if (!editandoUsuario) return;
+    const email = editForm.email.trim();
+    if (!email) {
+      setEditError('El correo institucional es obligatorio.');
+      return;
+    }
+    setEditGuardando(true);
+    setEditError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/usuarios/${editandoUsuario.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+        body: JSON.stringify({
+          nombre: editForm.nombre,
+          email,
+          rol: editForm.rol,
+          estado: editForm.estado,
+          tipo_colaborador: editForm.tipo_colaborador || null,
+          sede_id: editForm.sede_id ? Number(editForm.sede_id) : null,
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setEditError(data?.detail || 'No se pudo actualizar el usuario.');
+        return;
+      }
+      // Actualización optimista + reconciliación con el backend en tiempo real.
+      setUsuarios((prev) => prev.map((u) => (u.id === editandoUsuario.id ? { ...u, ...data } : u)));
+      setEditandoUsuario(null);
+      await fetchUsuarios();
+    } catch (err) {
+      setEditError('Error de conexión al actualizar el usuario.');
+    } finally {
+      setEditGuardando(false);
+    }
+  };
+
   const handleUserDelete = async (id: number) => {
     if (!confirm('¿Eliminar este usuario?')) return;
     const res = await fetch(`${API_BASE_URL}/api/usuarios/${id}`, {
@@ -701,6 +756,13 @@ function MainApp() {
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', '/');
     }
+  };
+
+  // Navegación desde el menú lateral: cambia de pestaña y, en la vista móvil,
+  // cierra el sidebar automáticamente una vez ejecutada la navegación.
+  const navegarATab = (tab: 'crear' | 'mis-tickets' | 'dashboard' | 'usuarios' | 'sedes' | 'entrenamiento') => {
+    setActiveTab(tab);
+    setMenuAbierto(false);
   };
 
   const coincideBusqueda = (t: Ticket) => {
@@ -943,7 +1005,7 @@ function MainApp() {
 
           <nav className="space-y-2">
             <button
-              onClick={() => setActiveTab('crear')}
+              onClick={() => navegarATab('crear')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                 activeTab === 'crear' 
                   ? 'bg-white text-[#ED1C24] shadow-lg' 
@@ -954,7 +1016,7 @@ function MainApp() {
             </button>
 
             <button
-              onClick={() => setActiveTab('mis-tickets')}
+              onClick={() => navegarATab('mis-tickets')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                 activeTab === 'mis-tickets' 
                   ? 'bg-white text-[#ED1C24] shadow-lg' 
@@ -966,7 +1028,7 @@ function MainApp() {
 
             {isTI && (
               <button
-                onClick={() => setActiveTab('dashboard')}
+                onClick={() => navegarATab('dashboard')}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                   activeTab === 'dashboard' 
                     ? 'bg-white text-[#ED1C24] shadow-lg' 
@@ -979,7 +1041,7 @@ function MainApp() {
 
             {isTI && (
               <button
-                onClick={() => setActiveTab('entrenamiento')}
+                onClick={() => navegarATab('entrenamiento')}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                   activeTab === 'entrenamiento' 
                     ? 'bg-white text-[#ED1C24] shadow-lg' 
@@ -993,7 +1055,7 @@ function MainApp() {
             {isAdmin && (
               <>
                 <button
-                  onClick={() => setActiveTab('usuarios')}
+                  onClick={() => navegarATab('usuarios')}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                     activeTab === 'usuarios' 
                       ? 'bg-white text-[#ED1C24] shadow-lg' 
@@ -1003,7 +1065,7 @@ function MainApp() {
                   <ShieldAlert className="w-4 h-4" /> Gestión de Usuarios
                 </button>
                 <button
-                  onClick={() => setActiveTab('sedes')}
+                  onClick={() => navegarATab('sedes')}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                     activeTab === 'sedes' 
                       ? 'bg-white text-[#ED1C24] shadow-lg' 
@@ -1479,6 +1541,12 @@ function MainApp() {
                         <option value="Suspendido">Suspendido</option>
                       </select>
                       <button
+                        onClick={() => abrirEdicion(u)}
+                        className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200 flex items-center gap-1"
+                      >
+                        <Pencil className="w-3.5 h-3.5" /> Editar
+                      </button>
+                      <button
                         onClick={() => handleUserDelete(u.id)}
                         className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-xs font-semibold border border-red-200 hover:bg-red-100"
                       >
@@ -1622,6 +1690,116 @@ function MainApp() {
         )}
 
       </main>
+
+      {editandoUsuario && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !editGuardando && setEditandoUsuario(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6 border-b border-slate-100 flex items-start justify-between gap-4 sticky top-0 bg-white z-10">
+              <div>
+                <span className="text-xs font-mono font-bold text-[#ED1C24]">Editar usuario</span>
+                <h2 className="text-xl font-extrabold text-slate-900">{editandoUsuario.nombre || editandoUsuario.email}</h2>
+              </div>
+              <button onClick={() => setEditandoUsuario(null)} disabled={editGuardando} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 disabled:opacity-50">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-xs text-slate-500 uppercase font-bold">Nombre completo</label>
+                <input
+                  value={editForm.nombre}
+                  onChange={(e) => setEditForm({ ...editForm, nombre: e.target.value })}
+                  placeholder="Nombre completo"
+                  className="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#ED1C24]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs text-slate-500 uppercase font-bold">Correo institucional</label>
+                <input
+                  value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                  placeholder="@alianzafrancesa.org.pe"
+                  className="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-[#ED1C24]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 uppercase font-bold">Rol</label>
+                  <select
+                    value={editForm.rol}
+                    onChange={(e) => setEditForm({ ...editForm, rol: e.target.value })}
+                    className="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                  >
+                    <option value="Usuario">Usuario</option>
+                    <option value="HELPDESK_TI">HELPDESK_TI</option>
+                    <option value="ARQUITECTO_TI">ARQUITECTO_TI</option>
+                    <option value="INFRAESTRUCTURA_TI">INFRAESTRUCTURA_TI</option>
+                    <option value="ADMIN_TI">ADMIN_TI</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 uppercase font-bold">Estado</label>
+                  <select
+                    value={editForm.estado}
+                    onChange={(e) => setEditForm({ ...editForm, estado: e.target.value })}
+                    className="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                  >
+                    <option value="Activo">Activo</option>
+                    <option value="Suspendido">Suspendido</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 uppercase font-bold">Sede asignada</label>
+                  <select
+                    value={editForm.sede_id}
+                    onChange={(e) => setEditForm({ ...editForm, sede_id: e.target.value })}
+                    className="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                  >
+                    <option value="">— Sin sede —</option>
+                    {sedes.map((s) => <option key={s.id} value={String(s.id)}>{s.nombre}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 uppercase font-bold">Tipo de colaborador</label>
+                  <select
+                    value={editForm.tipo_colaborador}
+                    onChange={(e) => setEditForm({ ...editForm, tipo_colaborador: e.target.value })}
+                    className="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
+                  >
+                    <option value="">— Seleccionar —</option>
+                    <option value="Administrativo">Administrativo</option>
+                    <option value="Docente">Docente</option>
+                  </select>
+                </div>
+              </div>
+
+              {editError && (
+                <p className="text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{editError}</p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  onClick={() => setEditandoUsuario(null)}
+                  disabled={editGuardando}
+                  className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 text-xs font-semibold hover:bg-slate-200 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleUserSave}
+                  disabled={editGuardando}
+                  className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] disabled:opacity-60"
+                >
+                  {editGuardando ? 'Guardando...' : 'Guardar cambios'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {ticketDetalle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={cerrarDetalle}>

@@ -1,5 +1,5 @@
 /* Service Worker — Sistema IT Alianza */
-const CACHE_NAME = "it-alianza-v2";
+const CACHE_NAME = "it-alianza-v4";
 
 const PRECACHE = [
   "/",
