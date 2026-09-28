@@ -222,26 +222,36 @@ def _migrate() -> None:
 
 
 def seed_data(db: Session) -> None:
-    """Inserta las sedes y usuarios iniciales de forma idempotente."""
+    """Inserta las sedes y usuarios iniciales de forma idempotente y NO destructiva.
+
+    - Sedes: se insertan solo si no existen (búsqueda por nombre).
+    - Usuarios: se insertan únicamente en el primer arranque (tabla vacía),
+      para no sobrescribir ni duplicar a los usuarios que el administrador
+      haya editado posteriormente (por ejemplo, cambios de correo).
+
+    De esta forma, las ediciones del administrador persisten entre reinicios.
+    """
     for nombre, tipo in SEDES_INICIALES:
         if not db.query(Sede).filter(Sede.nombre == nombre).first():
             db.add(Sede(nombre=nombre, tipo=tipo))
     db.flush()
 
-    sede_ids = {s.nombre: s.id for s in db.query(Sede).all()}
-
-    for u in USUARIOS_INICIALES:
-        existing = db.query(Usuario).filter(Usuario.email == u["email"]).first()
-        if existing is None:
-            existing = Usuario(email=u["email"])
-            db.add(existing)
-        existing.nombre = u["nombre"]
-        existing.rol = u["rol"]
-        existing.estado = u["estado"]
-        existing.tipo_colaborador = u["tipo_colaborador"]
-        existing.sede_id = sede_ids.get(u["sede"])
-        existing.cargo_ti = u["cargo_ti"]
-        existing.telefono_whatsapp = u.get("telefono_whatsapp")
+    # Solo sembrar usuarios cuando la tabla está vacía (primera ejecución).
+    if db.query(Usuario).count() == 0:
+        sede_ids = {s.nombre: s.id for s in db.query(Sede).all()}
+        for u in USUARIOS_INICIALES:
+            db.add(
+                Usuario(
+                    email=u["email"],
+                    nombre=u["nombre"],
+                    rol=u["rol"],
+                    estado=u["estado"],
+                    tipo_colaborador=u["tipo_colaborador"],
+                    sede_id=sede_ids.get(u["sede"]),
+                    cargo_ti=u["cargo_ti"],
+                    telefono_whatsapp=u.get("telefono_whatsapp"),
+                )
+            )
     db.commit()
 
     seed_soluciones(db)
@@ -417,10 +427,19 @@ def update_usuario(usuario_id: int, update: UsuarioUpdate, db: Session = Depends
     if u is None:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-    for campo in ["nombre", "rol", "estado", "tipo_colaborador", "sede_id", "cargo_ti"]:
+    if update.email is not None and update.email != u.email:
+        if db.query(Usuario).filter(Usuario.email == update.email, Usuario.id != usuario_id).first():
+            raise HTTPException(status_code=409, detail="El correo ya está registrado en otro usuario")
+        u.email = update.email
+
+    for campo in ["nombre", "rol", "estado", "tipo_colaborador", "cargo_ti"]:
         valor = getattr(update, campo)
         if valor is not None:
             setattr(u, campo, valor)
+
+    # ``sede_id`` admite ser vaciado explícitamente (None) usando model_fields_set.
+    if "sede_id" in update.model_fields_set:
+        u.sede_id = update.sede_id
 
     db.commit()
     db.refresh(u)

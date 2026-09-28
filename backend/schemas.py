@@ -92,12 +92,24 @@ class UsuarioIn(BaseModel):
 
 
 class UsuarioUpdate(BaseModel):
+    email: Optional[str] = None
     nombre: Optional[str] = None
     rol: Optional[str] = None
     estado: Optional[str] = None
     tipo_colaborador: Optional[str] = None
     sede_id: Optional[int] = None
     cargo_ti: Optional[str] = None
+
+    @field_validator("email")
+    @classmethod
+    def _validar_email(cls, v):
+        if v is None:
+            return v
+        if not validar_dominio(v):
+            raise ValueError(
+                "Acceso restringido: solo se permiten correos @alianzafrancesa.org.pe"
+            )
+        return v.strip().lower()
 
 
 class UsuarioOut(ORMModel):
