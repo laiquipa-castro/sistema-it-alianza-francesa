@@ -92,7 +92,7 @@ USUARIOS_INICIALES = [
         "telefono_whatsapp": "+51986068159",
     },
     {
-        "email": "jesus.barbaran@alianzafrancesa.org.pe",
+        "email": "j.barbaran@alianzafrancesa.org.pe",
         "nombre": "JESÚS ALBERTO BARBARÁN ROJAS",
         "rol": "HELPDESK_TI",
         "estado": "Activo",
@@ -101,7 +101,7 @@ USUARIOS_INICIALES = [
         "cargo_ti": "Help Desk TI",
     },
     {
-        "email": "jhon.salas@alianzafrancesa.org.pe",
+        "email": "j.salas@alianzafrancesa.org.pe",
         "nombre": "JHON SALAS TAYPE",
         "rol": "ARQUITECTO_TI",
         "estado": "Activo",
@@ -110,7 +110,7 @@ USUARIOS_INICIALES = [
         "cargo_ti": "Arquitecto de Soluciones TI",
     },
     {
-        "email": "adrian.alcantara@alianzafrancesa.org.pe",
+        "email": "a.alcantara@alianzafrancesa.org.pe",
         "nombre": "ADRIÁN ANGELO ALCÁNTARA ALVÁN",
         "rol": "INFRAESTRUCTURA_TI",
         "estado": "Activo",
