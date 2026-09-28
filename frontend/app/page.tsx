@@ -743,7 +743,17 @@ function MainApp() {
   const REPORTE_CSS = `
   :root { --rojo:#e30613; --azul:#002395; --gris:#f4f5f7; --borde:#e5e7eb; --texto:#1f2937; --muted:#6b7280; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--texto); background: #f4f5f7; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--texto); background: #f4f5f7; -webkit-print-color-adjust: exact; print-color-adjust: exact; padding-top: 76px; }
+  .toolbar-pdf { position: fixed; top: 0; left: 0; right: 0; height: 56px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 16px; background: #1f2937; color: #fff; z-index: 9999; box-shadow: 0 2px 10px rgba(0,0,0,.3); }
+  .toolbar-pdf .titulo { font-size: 15px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .toolbar-btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; background: #e30613; color: #fff; border: none; border-radius: 999px; padding: 10px 18px; font-size: 14px; font-weight: 700; cursor: pointer; line-height: 1; }
+  .toolbar-btn:active { background: #b00510; }
+  @media (max-width: 480px) {
+    body { padding-top: 68px; }
+    .toolbar-pdf { height: 50px; padding: 0 12px; }
+    .toolbar-pdf .titulo { font-size: 13px; }
+    .toolbar-btn { padding: 9px 14px; font-size: 13px; }
+  }
   .reporte-card { background:#fff; border-radius:16px; border:1px solid var(--borde); box-shadow:0 4px 18px rgba(0,0,0,.06); margin:20px auto; max-width:820px; overflow:hidden; page-break-after:always; }
   .reporte-card:last-child { page-break-after:auto; }
   .encabezado { display:flex; align-items:center; gap:16px; padding:20px 24px; border-bottom:3px solid var(--rojo); background:linear-gradient(90deg,#fff,#fdf2f2); }
@@ -783,7 +793,8 @@ function MainApp() {
   .firma span { font-size:12px; color:var(--muted); }
   .seccion, .campo, .nodo, .nodo-cuerpo, .timeline, .historico, .conclusion, .conclusion-box, .firmas, .firma, .detalle p, .conclusion-texto { break-inside: avoid; page-break-inside: avoid; }
   @media print {
-    body { background:#fff; }
+    body { background:#fff; padding-top: 0 !important; }
+    .toolbar-pdf { display: none !important; }
     .reporte-card { box-shadow:none; border:1px solid var(--borde); margin:0 auto 12px; border-radius:0; }
     .reporte-card, .seccion, .nodo, .conclusion-box, .firmas { box-shadow:none; }
     .accion-botones, button { display:none !important; }
@@ -871,7 +882,7 @@ function MainApp() {
       </section>`;
     }).join('');
 
-    const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Reporte de Tickets TI — Alianza Francesa</title><style>${REPORTE_CSS}</style></head><body>${portada}${tarjetas}</body></html>`;
+    const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Reporte de Tickets TI — Alianza Francesa</title><style>${REPORTE_CSS}</style></head><body><div class="toolbar-pdf"><div class="titulo">Reporte de Tickets TI</div><button type="button" class="toolbar-btn" onclick="cerrarVista()">← Volver</button></div>${portada}${tarjetas}<script>function cerrarVista(){try{window.close();}catch(e){}setTimeout(function(){window.location.replace('/');},250);}</script></body></html>`;
     w.document.write(html);
     w.document.close();
     w.print();
