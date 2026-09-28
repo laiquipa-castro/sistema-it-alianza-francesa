@@ -10,5 +10,5 @@ python-dotenv
 # ---------------------------------------------------------------------------
 # MySQL
 # pymysql
-# PostgreSQL
-# psycopg2-binary
+# PostgreSQL (activo para el despliegue en Render)
+psycopg2-binary

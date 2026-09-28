@@ -312,6 +312,14 @@ function MainApp() {
     }
   }, [user]);
 
+  // Revalida las sedes al entrar al formulario de registro para reflejar
+  // en tiempo real las sedes nuevas o eliminadas (sin recargar la página).
+  useEffect(() => {
+    if (user && activeTab === 'crear') {
+      fetchSedes();
+    }
+  }, [activeTab, user]);
+
   // Deep-link: si la URL trae /admin/tickets/[id] o ?ticket=[id], abre el detalle
   useEffect(() => {
     const id = leerTicketDeURL();
@@ -566,30 +574,37 @@ function MainApp() {
   };
 
   const handleUserUpdate = async (id: number, campos: Record<string, any>) => {
-    await fetch(`${API_BASE_URL}/api/usuarios/${id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/usuarios/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
       body: JSON.stringify(campos)
     });
-    fetchUsuarios();
+    if (!res.ok) return;
+    // Actualización optimista + reconciliación con el backend.
+    setUsuarios((prev) => prev.map((u) => (u.id === id ? { ...u, ...campos } : u)));
+    await fetchUsuarios();
   };
 
   const handleUserDelete = async (id: number) => {
     if (!confirm('¿Eliminar este usuario?')) return;
-    await fetch(`${API_BASE_URL}/api/usuarios/${id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/usuarios/${id}`, {
       method: 'DELETE',
       headers: { 'X-User-Email': user?.email || '' }
     });
-    fetchUsuarios();
+    if (!res.ok) return;
+    setUsuarios((prev) => prev.filter((u) => u.id !== id));
+    await fetchUsuarios();
   };
 
   const handleSedeDelete = async (id: number) => {
     if (!confirm('¿Eliminar esta sede?')) return;
-    await fetch(`${API_BASE_URL}/api/sedes/${id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/sedes/${id}`, {
       method: 'DELETE',
       headers: { 'X-User-Email': user?.email || '' }
     });
-    fetchSedes();
+    if (!res.ok) return;
+    setSedes((prev) => prev.filter((s) => s.id !== id));
+    await fetchSedes();
   };
 
   const [nuevoUsuario, setNuevoUsuario] = useState({ email: '', nombre: '', rol: 'Usuario' });
@@ -597,24 +612,32 @@ function MainApp() {
 
   const handleCreateUsuario = async () => {
     if (!nuevoUsuario.email.trim()) return;
-    await fetch(`${API_BASE_URL}/api/usuarios`, {
+    const res = await fetch(`${API_BASE_URL}/api/usuarios`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
       body: JSON.stringify(nuevoUsuario)
     });
+    if (res.ok) {
+      const creado = await res.json();
+      setUsuarios((prev) => [...prev, creado]);
+    }
     setNuevoUsuario({ email: '', nombre: '', rol: 'Usuario' });
-    fetchUsuarios();
+    await fetchUsuarios();
   };
 
   const handleCreateSede = async () => {
     if (!nuevaSede.nombre.trim()) return;
-    await fetch(`${API_BASE_URL}/api/sedes`, {
+    const res = await fetch(`${API_BASE_URL}/api/sedes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
       body: JSON.stringify(nuevaSede)
     });
+    if (res.ok) {
+      const creada = await res.json();
+      setSedes((prev) => [...prev, creada]);
+    }
     setNuevaSede({ nombre: '', tipo: 'Sede Descentralizada' });
-    fetchSedes();
+    await fetchSedes();
   };
 
   if (!user) {
@@ -1047,11 +1070,7 @@ function MainApp() {
                   required
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 text-sm text-slate-800 focus:outline-none focus:border-[#ED1C24]"
                 >
-                  <option>Miraflores</option>
-                  <option>Los Olivos</option>
-                  <option>La Molina</option>
-                  <option>Jesús María</option>
-                  <option>Remoto</option>
+                  {sedes.map((s) => <option key={s.id} value={s.nombre}>{s.nombre}</option>)}
                 </select>
               </div>
 

@@ -1,5 +1,5 @@
 /* Service Worker — Sistema IT Alianza */
-const CACHE_NAME = "it-alianza-v1";
+const CACHE_NAME = "it-alianza-v2";
 
 const PRECACHE = [
   "/",
@@ -42,6 +42,10 @@ self.addEventListener("fetch", (event) => {
 
   // Solo mismo origen (los assets externos se sirven por red normalmente).
   if (url.origin !== self.location.origin) return;
+
+  // Las peticiones a la API siempre van por red (nunca se cachean) para evitar
+  // datos obsoletos tras crear/editar/eliminar usuarios o sedes.
+  if (url.pathname.startsWith("/api/")) return;
 
   // Navegaciones: network-first con fallback al app shell cacheado.
   if (request.mode === "navigate") {
