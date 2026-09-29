@@ -502,8 +502,6 @@ function MainApp() {
       if (TI_ROLES.includes(user.rol || '')) {
         fetchTecnicos();
         fetchSoluciones();
-      }
-      if (user.rol === 'ADMIN_TI') {
         fetchUsuarios();
       }
     }
@@ -1264,7 +1262,7 @@ function MainApp() {
               </button>
             )}
 
-            {isAdmin && (
+            {isTI && (
               <>
                 <button
                   onClick={() => navegarATab('usuarios')}
@@ -1663,13 +1661,21 @@ function MainApp() {
             )}
           </div>
         )}
-        {activeTab === 'usuarios' && isAdmin && (
+        {activeTab === 'usuarios' && isTI && (
           <div className="max-w-5xl mx-auto space-y-4">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-slate-900">Gestión de Usuarios</h1>
               <BackToHome onClick={volverAlInicio} />
             </div>
 
+            {!isAdmin && (
+              <div className="bg-blue-50 border border-blue-200 text-blue-800 text-sm px-4 py-3 rounded-xl flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 shrink-0" />
+                <span>Modo solo lectura: únicamente el Responsable de Sistemas (ADMIN_TI) puede crear, editar o eliminar usuarios.</span>
+              </div>
+            )}
+
+            {isAdmin && (
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row gap-3">
               <input
                 value={nuevoUsuario.email}
@@ -1701,6 +1707,7 @@ function MainApp() {
                 Agregar
               </button>
             </div>
+            )}
 
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="divide-y divide-slate-100">
@@ -1711,6 +1718,7 @@ function MainApp() {
                       <p className="text-xs text-slate-500">{u.email}</p>
                       <p className="text-[11px] text-slate-400">Sede: {u.sede_nombre || '—'} • {u.tipo_colaborador || '—'}</p>
                     </div>
+                    {isAdmin ? (
                     <div className="flex items-center gap-2 flex-wrap">
                       <select
                         value={u.rol}
@@ -1744,6 +1752,12 @@ function MainApp() {
                         Quitar
                       </button>
                     </div>
+                    ) : (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center px-2 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-semibold">{u.rol}</span>
+                      <span className={`inline-flex items-center px-2 py-1 rounded-lg text-xs font-semibold ${u.estado === 'Activo' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{u.estado}</span>
+                    </div>
+                    )}
                   </div>
                 ))}
                 {usuarios.length === 0 && (
@@ -1760,13 +1774,21 @@ function MainApp() {
           </div>
         )}
 
-        {activeTab === 'sedes' && isAdmin && (
+        {activeTab === 'sedes' && isTI && (
           <div className="max-w-3xl mx-auto space-y-4">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h1 className="text-2xl font-bold text-slate-900">Gestión de Sedes</h1>
               <BackToHome onClick={volverAlInicio} />
             </div>
 
+            {!isAdmin && (
+              <div className="bg-blue-50 border border-blue-200 text-blue-800 text-sm px-4 py-3 rounded-xl flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 shrink-0" />
+                <span>Modo solo lectura: únicamente el Responsable de Sistemas (ADMIN_TI) puede crear o eliminar sedes.</span>
+              </div>
+            )}
+
+            {isAdmin && (
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex flex-col md:flex-row gap-3">
               <input
                 value={nuevaSede.nombre}
@@ -1790,6 +1812,7 @@ function MainApp() {
                 Agregar
               </button>
             </div>
+            )}
 
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="divide-y divide-slate-100">
@@ -1799,12 +1822,14 @@ function MainApp() {
                       <p className="font-semibold text-slate-800 text-sm">{s.nombre}</p>
                       <p className="text-xs text-slate-500">{s.tipo}</p>
                     </div>
-                    <button
-                      onClick={() => handleSedeDelete(s.id)}
-                      className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-xs font-semibold border border-red-200 hover:bg-red-100"
-                    >
-                      Quitar
-                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => handleSedeDelete(s.id)}
+                        className="px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-xs font-semibold border border-red-200 hover:bg-red-100"
+                      >
+                        Quitar
+                      </button>
+                    )}
                   </div>
                 ))}
                 {sedes.length === 0 && (

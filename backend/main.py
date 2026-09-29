@@ -372,8 +372,13 @@ def delete_sede(sede_id: int, db: Session = Depends(get_db), user: dict = Depend
 # Endpoints: Usuarios
 # ---------------------------------------------------------------------------
 @app.get("/api/usuarios", response_model=List[UsuarioOut])
-def list_usuarios(db: Session = Depends(get_db), user: dict = Depends(require_admin)):
-    """Lista únicamente al personal técnico (roles TI)."""
+def list_usuarios(db: Session = Depends(get_db), user: dict = Depends(require_ti)):
+    """Lista únicamente al personal técnico (roles TI).
+
+    Cualquier miembro del equipo TI puede consultar el listado (solo lectura);
+    la creación/edición/eliminación sigue restringida a ADMIN_TI mediante
+    ``require_admin`` en los endpoints de mutación.
+    """
     rows = (
         db.query(Usuario)
         .options(joinedload(Usuario.sede))
