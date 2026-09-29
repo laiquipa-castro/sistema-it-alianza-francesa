@@ -25,6 +25,12 @@ def _csv(value: str) -> list[str]:
 # URL pública del frontend (Vercel), usada para habilitar CORS en producción.
 FRONTEND_URL: str = os.getenv("FRONTEND_URL", "").rstrip("/")
 
+# Portal oficial. Se conserva como origen confiable incluso si Render define
+# CORS_ORIGINS="*" o deja FRONTEND_URL vacío por error de configuración.
+TRUSTED_FRONTEND_ORIGINS: tuple[str, ...] = (
+    "https://sistema-it-alianza-francesa.vercel.app",
+)
+
 # Orígenes permitidos por el frontend (separados por coma).
 CORS_ORIGINS: list[str] = _csv(
     os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
@@ -32,9 +38,10 @@ CORS_ORIGINS: list[str] = _csv(
 
 # Se agrega el frontend configurado y se descarta cualquier comodín para que
 # navegadores de orígenes desconocidos no puedan consumir la API.
-if FRONTEND_URL and FRONTEND_URL not in CORS_ORIGINS:
-    CORS_ORIGINS.append(FRONTEND_URL)
 CORS_ORIGINS = [origin for origin in CORS_ORIGINS if origin != "*"]
+for origin in (*TRUSTED_FRONTEND_ORIGINS, FRONTEND_URL):
+    if origin and origin not in CORS_ORIGINS:
+        CORS_ORIGINS.append(origin)
 
 # URL pública del portal (usada para enlaces dentro de los correos).
 APP_URL: str = os.getenv("APP_URL", "http://localhost:3000").rstrip("/")
