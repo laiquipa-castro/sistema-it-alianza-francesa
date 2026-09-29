@@ -1421,7 +1421,6 @@ function MainApp() {
           <div className="space-y-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div className="flex items-center gap-3 flex-wrap">
-                <BackToHome onClick={volverAlInicio} />
                 <div>
                   <h1 className="text-2xl font-bold text-slate-900">Panel de Gestión Informática</h1>
                   <p className="text-slate-500 text-sm">Monitoreo de atención y estado de requerimientos.</p>
