@@ -1545,9 +1545,12 @@ function MainApp() {
         )}
 
         {activeTab === 'mis-tickets' && (
-          <div className="max-w-4xl mx-auto space-y-4">
+          <div className={isTI ? 'w-full space-y-4' : 'max-w-4xl mx-auto space-y-4'}>
             <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
               <h1 className="text-2xl font-bold text-slate-900">{isTI ? 'Bandeja de Tickets IT' : 'Mis Solicitudes'}</h1>
+              {isTI && (
+                <BackToHome onClick={volverAlInicio} label="Volver al Dashboard" />
+              )}
             </div>
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-2">
               <Search className="w-4 h-4 text-slate-400" />
