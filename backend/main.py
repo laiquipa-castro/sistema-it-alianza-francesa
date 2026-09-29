@@ -50,6 +50,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_data(db)
+        normalizar_correos_ti(db)
     finally:
         db.close()
     yield
@@ -82,6 +83,17 @@ TI_ADMIN_EMAILS = {
     "a.alcantara@alianzafrancesa.org.pe",
     "j.salas@alianzafrancesa.org.pe",
     "j.barbaran@alianzafrancesa.org.pe",
+}
+
+# Correos "largos" (legacy) -> correo oficial corto de cada técnico de TI.
+# Se usa en :func:`normalizar_correos_ti` para actualizar, de forma idempotente,
+# los registros existentes que aún conservan un correo legado al correo corto
+# oficial listado en el enunciado de corrección de TI.
+CORREOS_TI_LEGACY = {
+    "luis.aiquipa@alianzafrancesa.org.pe": "l.aiquipa-castro@alianzafrancesa.org.pe",
+    "adrian.alcantara@alianzafrancesa.org.pe": "a.alcantara@alianzafrancesa.org.pe",
+    "jhon.salas@alianzafrancesa.org.pe": "j.salas@alianzafrancesa.org.pe",
+    "jesus.barbaran@alianzafrancesa.org.pe": "j.barbaran@alianzafrancesa.org.pe",
 }
 
 SEDES_INICIALES = [
@@ -267,6 +279,32 @@ def seed_data(db: Session) -> None:
     db.commit()
 
     seed_soluciones(db)
+
+
+def normalizar_correos_ti(db: Session) -> None:
+    """Actualiza los correos legacy de los técnicos TI a su correo corto oficial.
+
+    Los registros existentes que aún conservan un correo largo (legacy) se
+    normalizan de forma idempotente a su correo corto oficial, de modo que la
+    autenticación OAuth, las notificaciones y la Gestión de Usuarios operen
+    siempre con el correo institucional oficial. No toca usuarios no mapeados.
+    """
+    usuarios = db.query(Usuario).filter(Usuario.rol.in_(TI_ROLES)).all()
+    for u in usuarios:
+        correo_actual = (u.email or "").strip().lower()
+        correo_oficial = CORREOS_TI_LEGACY.get(correo_actual)
+        if not correo_oficial:
+            continue
+        # Evita colisiones: si el correo oficial ya pertenece a otro registro,
+        # se conserva ese registro oficial y se descarta la reasignación.
+        destino = (
+            db.query(Usuario)
+            .filter(Usuario.email == correo_oficial, Usuario.id != u.id)
+            .first()
+        )
+        if destino is None:
+            u.email = correo_oficial
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
