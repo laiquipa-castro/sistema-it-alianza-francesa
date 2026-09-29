@@ -6,7 +6,7 @@ import { jwtDecode } from 'jwt-decode';
 import { 
   ShieldAlert, CheckCircle2, Clock, 
   PlusCircle, LayoutDashboard, LogOut,
-  Send, Menu, X, Bot, BookOpen, SearchX, Search, Pencil
+  Send, Menu, X, Bot, BookOpen, SearchX, Search, Pencil, Loader2
 } from 'lucide-react';
 import BackToHome from '@/components/BackToHome';
 
@@ -183,7 +183,7 @@ function GoogleLoginButton({ onSuccess, onError }: { onSuccess: (credentialRespo
     <button
       type="button"
       onClick={() => login()}
-      className="flex items-center justify-center gap-3 w-full max-w-xs px-4 py-2.5 bg-white border border-slate-300 rounded-full shadow-sm hover:bg-slate-50 transition-all font-medium text-slate-700 text-sm mx-auto"
+      className="flex items-center justify-center gap-3 w-full max-w-xs px-4 py-2.5 bg-white border border-slate-300 rounded-full shadow-sm hover:bg-slate-50 active:scale-[0.98] transition-all font-medium text-slate-700 text-sm mx-auto"
     >
       <svg className="w-5 h-5" viewBox="0 0 24 24">
         <path
@@ -1197,9 +1197,9 @@ function MainApp() {
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-[#ED1C24] hover:bg-[#C41219] text-white font-bold py-4 rounded-xl shadow-lg shadow-red-200 transition-all flex items-center justify-center gap-2"
+                className="w-full bg-[#ED1C24] hover:bg-[#C41219] text-white font-bold py-4 rounded-xl shadow-lg shadow-red-200 transition-all active:scale-[0.98] disabled:opacity-60 flex items-center justify-center gap-2"
               >
-                <Send className="w-4 h-4" /> {loading ? "Enviando..." : "Enviar Requerimiento"}
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} {loading ? "Enviando..." : "Enviar Requerimiento"}
               </button>
             </form>
           </div>
@@ -1216,8 +1216,8 @@ function MainApp() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <button onClick={exportarCSV} className="px-4 py-2 rounded-xl bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78]">Exportar Reporte Excel</button>
-                <button onClick={exportarPDF} className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219]">Exportar PDF</button>
+                <button onClick={exportarCSV} className="px-4 py-2 rounded-xl bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] active:scale-[0.98]">Exportar Reporte Excel</button>
+                <button onClick={exportarPDF} className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] active:scale-[0.98]">Exportar PDF</button>
               </div>
             </div>
 
@@ -1321,7 +1321,7 @@ function MainApp() {
                         />
                         <button
                           onClick={() => handleSaveNota(t.id)}
-                          className="px-3 py-2 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78]"
+                          className="px-3 py-2 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] active:scale-[0.98]"
                         >
                           Guardar nota
                         </button>
@@ -1408,7 +1408,7 @@ function MainApp() {
               </div>
             )}
             {(isTI ? ticketsFiltrados : misTicketsFiltrados).map((t) => (
-              <div key={t.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+              <div key={t.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:shadow-md transition-shadow">
                 <div className="flex justify-between items-start mb-2">
                   <div>
                     <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
@@ -1430,7 +1430,7 @@ function MainApp() {
                     <span>Sede: {t.sede || '—'} • {formatoFecha(t.fecha_creacion)}</span>
                     <span className="ml-3">Técnico: {t.tecnico_asignado || '—'}</span>
                   </div>
-                  <button onClick={() => abrirDetalle(t)} className="px-3 py-1.5 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] whitespace-nowrap">
+                  <button onClick={() => abrirDetalle(t)} className="px-3 py-1.5 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] active:scale-[0.98] whitespace-nowrap">
                     Ver detalle
                   </button>
                 </div>
@@ -1505,7 +1505,7 @@ function MainApp() {
               </select>
               <button
                 onClick={handleCreateUsuario}
-                className="px-4 py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-semibold hover:bg-[#C41219]"
+                className="px-4 py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-semibold hover:bg-[#C41219] active:scale-[0.98]"
               >
                 Agregar
               </button>
@@ -1514,7 +1514,7 @@ function MainApp() {
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="divide-y divide-slate-100">
                 {usuarios.map((u) => (
-                  <div key={u.id} className="p-4 flex flex-col md:flex-row md:items-center gap-3 justify-between">
+                  <div key={u.id} className="p-4 flex flex-col md:flex-row md:items-center gap-3 justify-between hover:bg-slate-50/80 transition-colors">
                     <div className="space-y-0.5">
                       <p className="font-semibold text-slate-800 text-sm">{u.nombre}</p>
                       <p className="text-xs text-slate-500">{u.email}</p>
@@ -1555,6 +1555,15 @@ function MainApp() {
                     </div>
                   </div>
                 ))}
+                {usuarios.length === 0 && (
+                  <div className="p-10 flex flex-col items-center justify-center text-center">
+                    <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                      <SearchX className="w-7 h-7 text-slate-400" />
+                    </div>
+                    <h3 className="font-bold text-slate-700">Sin usuarios registrados</h3>
+                    <p className="text-sm text-slate-500 mt-1">Agrega el primer usuario corporativo para comenzar.</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1585,7 +1594,7 @@ function MainApp() {
               </select>
               <button
                 onClick={handleCreateSede}
-                className="px-4 py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-semibold hover:bg-[#C41219]"
+                className="px-4 py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-semibold hover:bg-[#C41219] active:scale-[0.98]"
               >
                 Agregar
               </button>
@@ -1594,7 +1603,7 @@ function MainApp() {
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="divide-y divide-slate-100">
                 {sedes.map((s) => (
-                  <div key={s.id} className="p-4 flex items-center justify-between">
+                  <div key={s.id} className="p-4 flex items-center justify-between hover:bg-slate-50/80 transition-colors">
                     <div>
                       <p className="font-semibold text-slate-800 text-sm">{s.nombre}</p>
                       <p className="text-xs text-slate-500">{s.tipo}</p>
@@ -1607,6 +1616,15 @@ function MainApp() {
                     </button>
                   </div>
                 ))}
+                {sedes.length === 0 && (
+                  <div className="p-10 flex flex-col items-center justify-center text-center">
+                    <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                      <LayoutDashboard className="w-7 h-7 text-slate-400" />
+                    </div>
+                    <h3 className="font-bold text-slate-700">Sin sedes registradas</h3>
+                    <p className="text-sm text-slate-500 mt-1">Agrega la primera sede para organizar la atención.</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1649,7 +1667,7 @@ function MainApp() {
               />
               <button
                 onClick={handleCreateSolucion}
-                className="px-5 py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-semibold hover:bg-[#C41219]"
+                className="px-5 py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-semibold hover:bg-[#C41219] active:scale-[0.98]"
               >
                 Guardar Solución
               </button>
@@ -1658,7 +1676,7 @@ function MainApp() {
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
               <div className="divide-y divide-slate-100">
                 {soluciones.map((s) => (
-                  <div key={s.id} className="p-4 flex items-start justify-between gap-4">
+                  <div key={s.id} className="p-4 flex items-start justify-between gap-4 hover:bg-slate-50/80 transition-colors">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-semibold text-slate-800 text-sm">{s.titulo}</p>
@@ -1684,6 +1702,15 @@ function MainApp() {
                     </div>
                   </div>
                 ))}
+                {soluciones.length === 0 && (
+                  <div className="p-10 flex flex-col items-center justify-center text-center">
+                    <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                      <BookOpen className="w-7 h-7 text-slate-400" />
+                    </div>
+                    <h3 className="font-bold text-slate-700">Sin soluciones registradas</h3>
+                    <p className="text-sm text-slate-500 mt-1">Registra soluciones rápidas para entrenar al asistente de IA.</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1791,8 +1818,9 @@ function MainApp() {
                 <button
                   onClick={handleUserSave}
                   disabled={editGuardando}
-                  className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] disabled:opacity-60"
+                  className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] active:scale-[0.98] disabled:opacity-60 flex items-center gap-2"
                 >
+                  {editGuardando && <Loader2 className="w-4 h-4 animate-spin" />}
                   {editGuardando ? 'Guardando...' : 'Guardar cambios'}
                 </button>
               </div>
@@ -1869,7 +1897,7 @@ function MainApp() {
             <div className="bg-slate-50 border border-slate-200 rounded-xl py-3 px-6 inline-block mb-6">
               <span className="text-2xl font-mono font-extrabold text-[#ED1C24] tracking-wider">{codigoSeguimiento}</span>
             </div>
-            <button onClick={() => setCodigoSeguimiento(null)} className="w-full py-3 rounded-xl bg-[#ED1C24] text-white font-bold hover:bg-[#C41219]">
+            <button onClick={() => setCodigoSeguimiento(null)} className="w-full py-3 rounded-xl bg-[#ED1C24] text-white font-bold hover:bg-[#C41219] active:scale-[0.98]">
               Entendido
             </button>
           </div>
@@ -1894,8 +1922,9 @@ function MainApp() {
             <button
               onClick={consultarAsistente}
               disabled={asistenteLoading}
-              className="w-full bg-[#002395] hover:bg-[#001d78] text-white font-semibold py-3 rounded-xl mb-4 disabled:opacity-60"
+              className="w-full bg-[#002395] hover:bg-[#001d78] text-white font-semibold py-3 rounded-xl mb-4 disabled:opacity-60 active:scale-[0.98] flex items-center justify-center gap-2"
             >
+              {asistenteLoading && <Loader2 className="w-4 h-4 animate-spin" />}
               {asistenteLoading ? 'Consultando...' : 'Consultar Solución'}
             </button>
 
@@ -1966,13 +1995,13 @@ function MainApp() {
                 placeholder="Escribe tu problema..."
                 className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#ED1C24]"
               />
-              <button onClick={enviarChat} disabled={chatLoading} className="px-3 py-2 rounded-xl bg-[#002395] text-white text-sm font-semibold hover:bg-[#001d78] disabled:opacity-60">
+              <button onClick={enviarChat} disabled={chatLoading} className="px-3 py-2 rounded-xl bg-[#002395] text-white text-sm font-semibold hover:bg-[#001d78] active:scale-[0.98] disabled:opacity-60">
                 Enviar
               </button>
             </div>
             <button
               onClick={irAFormulario}
-              className="mt-2 w-full py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-bold hover:bg-[#C41219]"
+              className="mt-2 w-full py-2.5 rounded-xl bg-[#ED1C24] text-white text-sm font-bold hover:bg-[#C41219] active:scale-[0.98]"
             >
               Ir a Formulario de Ticket
             </button>

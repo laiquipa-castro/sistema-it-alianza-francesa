@@ -19,8 +19,68 @@
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  ::selection {
+    background-color: rgba(237, 28, 36, 0.15);
+    color: #171717;
+  }
+
+  /* Anillo de foco consistente en campos de formulario */
+  input:focus,
+  select:focus,
+  textarea:focus {
+    outline: none;
+    border-color: #ed1c24;
+    box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.12);
+  }
+
+  /* Foco de teclado accesible para controles interactivos */
+  :focus-visible {
+    outline: 2px solid #ed1c24;
+    outline-offset: 2px;
+  }
+
+  /* Transiciones suaves globales en controles interactivos */
+  button,
+  select,
+  input,
+  textarea {
+    transition-property: color, background-color, border-color, box-shadow, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: ease-in-out;
+  }
+
+  /* Barra de desplazamiento sutil */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: #94a3b8;
+  }
 }
