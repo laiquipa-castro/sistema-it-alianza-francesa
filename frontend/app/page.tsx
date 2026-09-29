@@ -1549,7 +1549,6 @@ function MainApp() {
           <div className="max-w-4xl mx-auto space-y-4">
             <div className="flex items-center justify-between gap-3 flex-wrap mb-6">
               <h1 className="text-2xl font-bold text-slate-900">{isTI ? 'Bandeja de Tickets IT' : 'Mis Solicitudes'}</h1>
-              <BackToHome onClick={volverAlInicio} />
             </div>
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-2">
               <Search className="w-4 h-4 text-slate-400" />
@@ -1610,24 +1609,24 @@ function MainApp() {
               </div>
             ) : (
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[720px]">
+                <div className="w-full overflow-hidden">
+                  <table className="w-full text-sm table-fixed">
                     <thead>
                       <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
-                        <th className="px-6 py-3 font-bold">Ticket</th>
-                        <th className="px-4 py-3 font-bold">Estado</th>
-                        <th className="px-4 py-3 font-bold">Prioridad</th>
-                        <th className="px-4 py-3 font-bold">Asignado a</th>
-                        <th className="px-4 py-3 font-bold">Fecha</th>
-                        <th className="px-6 py-3 font-bold text-right">Acción</th>
+                        <th className="px-6 py-3 font-bold w-[32%]">Ticket</th>
+                        <th className="px-4 py-3 font-bold w-[14%]">Estado</th>
+                        <th className="px-4 py-3 font-bold w-[13%]">Prioridad</th>
+                        <th className="px-4 py-3 font-bold w-[18%]">Asignado a</th>
+                        <th className="px-4 py-3 font-bold w-[13%]">Fecha</th>
+                        <th className="px-6 py-3 font-bold text-right w-[10%]">Acción</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {(isTI ? ticketsFiltrados : misTicketsFiltrados).map((t) => (
                         <tr key={t.id} onClick={() => abrirDetalle(t)} className="hover:bg-slate-50/80 cursor-pointer transition-colors">
                           <td className="px-6 py-3.5 align-top">
-                            <span className="block text-[11px] font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
-                            <span className="block text-sm font-semibold text-slate-800">{t.tipo_requerimiento}</span>
+                            <span className="block text-[11px] font-mono font-bold text-[#ED1C24] truncate">{formatoCorrelativo(t)}</span>
+                            <span className="block text-sm font-semibold text-slate-800 truncate">{t.tipo_requerimiento}</span>
                           </td>
                           <td className="px-4 py-3.5 align-top whitespace-nowrap">
                             <span className={`${estadoBadgeClasses(t.estado)} text-[11px]`}>{t.estado}</span>
@@ -1640,7 +1639,7 @@ function MainApp() {
                             )}
                           </td>
                           <td className="px-4 py-3.5 align-top whitespace-nowrap">
-                            <span className="text-sm text-slate-600">{t.tecnico_asignado || 'Sin asignar'}</span>
+                            <span className="block text-sm text-slate-600 truncate">{t.tecnico_asignado || 'Sin asignar'}</span>
                           </td>
                           <td className="px-4 py-3.5 align-top whitespace-nowrap">
                             <span className="text-xs text-slate-500">{formatoFecha(t.fecha_creacion)}</span>
