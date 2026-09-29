@@ -6,7 +6,8 @@ import { jwtDecode } from 'jwt-decode';
 import { 
   ShieldAlert, CheckCircle2, Clock, 
   PlusCircle, LayoutDashboard, LogOut,
-  Send, Menu, X, Bot, BookOpen, SearchX, Search, Pencil, Loader2
+  Send, Menu, X, Bot, BookOpen, SearchX, Search, Pencil, Loader2,
+  AlertTriangle, Flag, CircleDot, MapPin, Calendar, MessageSquare, User, UserCircle2, Tag
 } from 'lucide-react';
 import BackToHome from '@/components/BackToHome';
 
@@ -95,6 +96,81 @@ function formatoFecha(iso?: string): string {
   });
 }
 
+// =============================================================================
+// Helpers visuales para el detalle de ticket (patrón Linear / Zendesk)
+// =============================================================================
+
+// Badge de prioridad con ícono y texto fino
+function prioridadBadgeClasses(prioridad: string): string {
+  const base = 'inline-flex items-center gap-1 font-semibold px-2 py-0.5 rounded-full border text-[11px]';
+  switch (prioridad) {
+    case 'Crítica':
+      return `${base} bg-red-50 text-red-700 border-red-200`;
+    case 'Alta':
+      return `${base} bg-orange-50 text-orange-700 border-orange-200`;
+    case 'Media':
+      return `${base} bg-amber-50 text-amber-700 border-amber-200`;
+    case 'Baja':
+      return `${base} bg-slate-100 text-slate-600 border-slate-200`;
+    default:
+      return `${base} bg-slate-100 text-slate-600 border-slate-200`;
+  }
+}
+
+function prioridadIcono(prioridad: string) {
+  switch (prioridad) {
+    case 'Crítica':
+      return <AlertTriangle className="w-3 h-3" />;
+    case 'Alta':
+    case 'Media':
+      return <Flag className="w-3 h-3" />;
+    case 'Baja':
+      return <CircleDot className="w-3 h-3" />;
+    default:
+      return null;
+  }
+}
+
+// Fecha relativa estilo Linear/Zendesk: "hace 5 min", "hace 2 h", "hace 1 día"
+function formatoRelativo(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const min = Math.floor((Date.now() - d.getTime()) / 60000);
+  if (min < 1) return 'hace un momento';
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const dias = Math.floor(h / 24);
+  if (dias === 1) return 'hace 1 día';
+  if (dias < 30) return `hace ${dias} días`;
+  const meses = Math.floor(dias / 30);
+  if (meses === 1) return 'hace 1 mes';
+  return `hace ${meses} meses`;
+}
+
+// Tiempo restante hacia una fecha futura: "en 2 h", "en 3 días", "vencido"
+function formatoRestante(iso?: string): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const min = Math.floor((d.getTime() - Date.now()) / 60000);
+  if (min <= 0) return 'vencido';
+  if (min < 60) return `en ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `en ${h} h`;
+  const dias = Math.floor(h / 24);
+  return `en ${dias} días`;
+}
+
+// SLA derivado de la prioridad (solo visual; sin cambios en backend)
+function calcularSLA(t: Ticket): Date {
+  const base = new Date(t.fecha_creacion);
+  const inicio = isNaN(base.getTime()) ? new Date() : base;
+  const horas = t.prioridad === 'Crítica' ? 4 : t.prioridad === 'Alta' ? 8 : t.prioridad === 'Baja' ? 48 : 24;
+  return new Date(inicio.getTime() + horas * 3600000);
+}
+
 // Extrae el id de ticket desde la URL (/admin/tickets/[id] o ?ticket=[id])
 function leerTicketDeURL(): number | null {
   if (typeof window === 'undefined') return null;
@@ -103,6 +179,123 @@ function leerTicketDeURL(): number | null {
   const q = new URLSearchParams(window.location.search).get('ticket');
   if (q && /^\d+$/.test(q)) return Number(q);
   return null;
+}
+
+// Nodos de actividad para la línea de tiempo del ticket
+interface NodoTimeline {
+  fecha: string;
+  actor: string;
+  rol: string;
+  accion: string;
+  detalle?: string;
+  tipo: 'solicitante' | 'tecnico' | 'sistema';
+}
+
+function construirTimeline(t: Ticket): NodoTimeline[] {
+  const nodos: NodoTimeline[] = [];
+  nodos.push({
+    fecha: t.fecha_creacion,
+    actor: t.user_name?.trim() || t.solicitante_email || 'Solicitante',
+    rol: 'Solicitante',
+    accion: 'Registró la solicitud',
+    detalle: t.descripcion || undefined,
+    tipo: 'solicitante',
+  });
+  if (t.tecnico_asignado) {
+    nodos.push({
+      fecha: t.fecha_resolucion || t.fecha_creacion,
+      actor: t.tecnico_asignado,
+      rol: 'Técnico TI',
+      accion: 'Tomó el caso y está atendiendo la solicitud',
+      tipo: 'tecnico',
+    });
+  }
+  if (t.notas_tecnicas) {
+    nodos.push({
+      fecha: t.fecha_resolucion || t.fecha_creacion,
+      actor: t.tecnico_asignado || 'Equipo TI',
+      rol: 'Técnico TI',
+      accion: 'Aplicó la solución técnica',
+      detalle: t.notas_tecnicas,
+      tipo: 'tecnico',
+    });
+  }
+  if (t.estado === 'Solucionado' || t.estado === 'Cerrado') {
+    nodos.push({
+      fecha: t.fecha_resolucion || t.fecha_creacion,
+      actor: t.tecnico_asignado || 'Equipo TI',
+      rol: 'Sistema',
+      accion: t.estado === 'Cerrado' ? 'Caso cerrado' : 'Caso resuelto',
+      tipo: 'sistema',
+    });
+  }
+  return nodos;
+}
+
+// Línea de tiempo con avatares, fechas relativas y conectores sutiles
+function TicketTimeline({ ticket }: { ticket: Ticket }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), 60000);
+    return () => clearInterval(t);
+  }, []);
+  const nodos = construirTimeline(ticket);
+  return (
+    <div>
+      {nodos.map((n, i) => (
+        <div key={i} className="relative flex gap-3 pb-5 last:pb-0">
+          {i < nodos.length - 1 && (
+            <span className="absolute left-[15px] top-9 bottom-0 w-px bg-slate-200" />
+          )}
+          <div
+            className={`relative z-10 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border ${
+              n.tipo === 'solicitante'
+                ? 'bg-[#002395] text-white border-[#002395]'
+                : n.tipo === 'tecnico'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : 'bg-slate-100 text-slate-500 border-slate-200'
+            }`}
+          >
+            {n.tipo === 'sistema' ? <CheckCircle2 className="w-4 h-4" /> : <User className="w-4 h-4" />}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-sm font-semibold text-slate-800">{n.actor}</span>
+              <span className="text-[11px] font-medium text-slate-400">{n.rol}</span>
+              <span className="text-[11px] text-slate-400">· {formatoRelativo(n.fecha)}</span>
+            </div>
+            <p className="text-sm text-slate-600 mt-0.5">{n.accion}</p>
+            {n.detalle && (
+              <p className="text-sm text-slate-700 whitespace-pre-line mt-1.5 bg-slate-50 border border-slate-100 rounded-lg p-3">
+                {n.detalle}
+              </p>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Fila de propiedad para el panel lateral
+function Propiedad({
+  icono,
+  label,
+  children,
+}: {
+  icono?: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="py-3 first:pt-0 last:pb-0">
+      <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        {icono}
+        {label}
+      </p>
+      <div className="mt-1">{children}</div>
+    </div>
+  );
 }
 
 // Pipeline de avance del ticket (stepper visual)
@@ -331,6 +524,19 @@ function MainApp() {
     const t = tickets.find((x) => x.id === id);
     if (t) setTicketDetalle(t);
   }, [tickets]);
+
+  // Cierra cualquier modal abierto con la tecla Escape (UX tipo Linear/Zendesk)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setTicketDetalle(null);
+        setCodigoSeguimiento(null);
+        setEditandoUsuario(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const abrirDetalle = (t: Ticket) => {
     setTicketDetalle(t);
@@ -975,6 +1181,12 @@ function MainApp() {
 
   const exportarPDF = () => exportarReportePDF(ticketsFiltrados);
   const exportarTicketPDF = (t: Ticket) => exportarReportePDF([t]);
+  // SLA visual del detalle (derivado de prioridad; solo presentación)
+  const slaDetalle = ticketDetalle ? calcularSLA(ticketDetalle) : null;
+  const slaDetalleVencido =
+    !!slaDetalle &&
+    !['Solucionado', 'Cerrado'].includes(ticketDetalle?.estado || '') &&
+    new Date().getTime() > slaDetalle.getTime();
 
   return (
     <div className="min-h-screen bg-[#FDFBFB] text-slate-800 flex font-sans">
@@ -1262,94 +1474,73 @@ function MainApp() {
             </div>
 
             <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+              <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
                 <h3 className="font-bold text-slate-800">Solicitudes Ingresadas</h3>
+                <span className="text-xs font-medium text-slate-400">{ticketsFiltrados.length} ticket{ticketsFiltrados.length === 1 ? '' : 's'}</span>
               </div>
-              <div className="divide-y divide-slate-100">
-                {ticketsFiltrados.map((t) => (
-                  <div key={t.id} className="p-6 hover:bg-slate-50/80 transition-colors flex flex-col gap-4">
-                    <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
-                          <h4 className="font-bold text-slate-900">{t.tipo_requerimiento}</h4>
-                          <span className={`${estadoBadgeClasses(t.estado)} text-[10px]`}>
-                            {t.estado}
-                          </span>
-                          {t.sede && <span className="text-[10px] bg-red-50 text-red-600 font-semibold px-2 py-0.5 rounded-full">{t.sede}</span>}
-                        </div>
-                        <p className="text-xs text-slate-600">{t.descripcion}</p>
-                        <p className="text-[11px] text-slate-400">Solicitante: {formatoSolicitante(t)} • {formatoFecha(t.fecha_creacion)}</p>
-                        {t.notas_tecnicas && (
-                          <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-2 mt-1">
-                            <span className="font-bold">Nota técnica:</span> {t.notas_tecnicas}
-                          </p>
-                        )}
-                      </div>
-
-                      {isTI && (
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <button
-                            onClick={() => handleUpdateStatus(t.id, 'En Proceso')}
-                            className="px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-200 hover:bg-sky-100"
-                          >
-                            En Proceso
-                          </button>
-                          <button
-                            onClick={() => handleUpdateStatus(t.id, 'Solucionado')}
-                            className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-200 hover:bg-emerald-100"
-                          >
-                            Solucionado
-                          </button>
-                          <button
-                            onClick={() => handleUpdateStatus(t.id, 'Cerrado')}
-                            className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200"
-                          >
-                            Cerrado
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {isTI && (
-                      <div className="flex items-center gap-2 border-t border-slate-100 pt-3">
-                        <input
-                          value={notasDraft[t.id] || ''}
-                          onChange={(e) => setNotasDraft((prev) => ({ ...prev, [t.id]: e.target.value }))}
-                          placeholder="Añadir nota técnica..."
-                          className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:border-[#ED1C24]"
-                        />
-                        <button
-                          onClick={() => handleSaveNota(t.id)}
-                          className="px-3 py-2 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] active:scale-[0.98]"
-                        >
-                          Guardar nota
-                        </button>
-                      </div>
-                    )}
-                    {isTI && (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <select
-                          value={t.tecnico_asignado_id || ''}
-                          onChange={(e) => handleAsignarTecnico(t.id, e.target.value)}
-                          className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
-                        >
-                          <option value="">Asignar Técnico</option>
-                          {tecnicos.map((tc) => (
-                            <option key={tc.id} value={tc.id}>{tc.nombre}</option>
-                          ))}
-                        </select>
-                        <button
-                          onClick={() => handleWhatsApp(t)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
-                        >
-                          Notificar WhatsApp
-                        </button>
-                      </div>
-                    )}
+              {ticketsFiltrados.length === 0 ? (
+                <div className="p-12 flex flex-col items-center justify-center text-center">
+                  <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-3">
+                    <SearchX className="w-7 h-7 text-slate-400" />
                   </div>
-                ))}
-              </div>
+                  <h3 className="font-bold text-slate-700">Sin resultados</h3>
+                  <p className="text-sm text-slate-500 mt-1">No se encontraron tickets con los filtros aplicados.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[760px]">
+                    <thead>
+                      <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                        <th className="px-6 py-3 font-bold">Ticket</th>
+                        <th className="px-4 py-3 font-bold">Solicitante</th>
+                        <th className="px-4 py-3 font-bold">Estado</th>
+                        <th className="px-4 py-3 font-bold">Prioridad</th>
+                        <th className="px-4 py-3 font-bold">Asignado a</th>
+                        <th className="px-4 py-3 font-bold">Fecha</th>
+                        <th className="px-6 py-3 font-bold text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {ticketsFiltrados.map((t) => (
+                        <tr key={t.id} onClick={() => abrirDetalle(t)} className="hover:bg-slate-50/80 cursor-pointer transition-colors">
+                          <td className="px-6 py-3.5 align-top">
+                            <span className="block text-[11px] font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
+                            <span className="block text-sm font-semibold text-slate-800">{t.tipo_requerimiento}</span>
+                          </td>
+                          <td className="px-4 py-3.5 align-top">
+                            <span className="block text-sm text-slate-700">{t.user_name?.trim() || '—'}</span>
+                            {t.sede && <span className="block text-[11px] text-slate-400">{t.sede}</span>}
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            <span className={`${estadoBadgeClasses(t.estado)} text-[11px]`}>{t.estado}</span>
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            {t.prioridad ? (
+                              <span className={prioridadBadgeClasses(t.prioridad)}>{prioridadIcono(t.prioridad)}{t.prioridad}</span>
+                            ) : (
+                              <span className="text-sm text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            <span className="text-sm text-slate-600">{t.tecnico_asignado || 'Sin asignar'}</span>
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            <span className="text-xs text-slate-500">{formatoFecha(t.fecha_creacion)}</span>
+                          </td>
+                          <td className="px-6 py-3.5 align-top text-right whitespace-nowrap">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); abrirDetalle(t); }}
+                              className="px-3 py-1.5 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] active:scale-[0.98]"
+                            >
+                              Ver detalle
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1407,59 +1598,7 @@ function MainApp() {
                 <input type="date" value={filtroHasta} onChange={(e) => setFiltroHasta(e.target.value)} className="bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs" />
               </div>
             )}
-            {(isTI ? ticketsFiltrados : misTicketsFiltrados).map((t) => (
-              <div key={t.id} className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
-                    <h3 className="font-bold text-slate-900 text-base">{t.tipo_requerimiento}</h3>
-                  </div>
-                  <span className={`${estadoBadgeClasses(t.estado)} text-xs`}>
-                    {t.estado}
-                  </span>
-                </div>
-                <p className="text-slate-600 text-sm mb-4">{t.descripcion}</p>
-                <TicketStepper estado={t.estado} />
-                {t.notas_tecnicas && (
-                  <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-3 mb-3">
-                    <span className="font-bold">Nota técnica:</span> {t.notas_tecnicas}
-                  </p>
-                )}
-                <div className="flex items-center justify-between gap-3 pt-4 border-t border-slate-100">
-                  <div className="text-xs text-slate-400">
-                    <span>Sede: {t.sede || '—'} • {formatoFecha(t.fecha_creacion)}</span>
-                    <span className="ml-3">Técnico: {t.tecnico_asignado || '—'}</span>
-                  </div>
-                  <button onClick={() => abrirDetalle(t)} className="px-3 py-1.5 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] active:scale-[0.98] whitespace-nowrap">
-                    Ver detalle
-                  </button>
-                </div>
-                {isTI && (
-                  <div className="flex items-center gap-2 flex-wrap mt-3">
-                    <button onClick={() => handleUpdateStatus(t.id, 'En Proceso')} className="px-3 py-1.5 rounded-lg bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-200 hover:bg-sky-100">En Proceso</button>
-                    <button onClick={() => handleUpdateStatus(t.id, 'Solucionado')} className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-200 hover:bg-emerald-100">Solucionado</button>
-                    <button onClick={() => handleUpdateStatus(t.id, 'Cerrado')} className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200">Cerrado</button>
-                    <select
-                      value={t.tecnico_asignado_id || ''}
-                      onChange={(e) => handleAsignarTecnico(t.id, e.target.value)}
-                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs"
-                    >
-                      <option value="">Asignar Técnico</option>
-                      {tecnicos.map((tc) => (
-                        <option key={tc.id} value={tc.id}>{tc.nombre}</option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => handleWhatsApp(t)}
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
-                    >
-                      Notificar WhatsApp
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-            {(isTI ? ticketsFiltrados : misTicketsFiltrados).length === 0 && (
+            {(isTI ? ticketsFiltrados : misTicketsFiltrados).length === 0 ? (
               <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-10 shadow-sm flex flex-col items-center justify-center text-center">
                 <div className="w-14 h-14 rounded-full bg-slate-100 flex items-center justify-center mb-3">
                   <SearchX className="w-7 h-7 text-slate-400" />
@@ -1468,6 +1607,57 @@ function MainApp() {
                 <p className="text-sm text-slate-500 mt-1">
                   {filtroBusqueda ? 'No se encontraron tickets para tu búsqueda.' : 'Aún no tienes solicitudes registradas.'}
                 </p>
+              </div>
+            ) : (
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm min-w-[720px]">
+                    <thead>
+                      <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                        <th className="px-6 py-3 font-bold">Ticket</th>
+                        <th className="px-4 py-3 font-bold">Estado</th>
+                        <th className="px-4 py-3 font-bold">Prioridad</th>
+                        <th className="px-4 py-3 font-bold">Asignado a</th>
+                        <th className="px-4 py-3 font-bold">Fecha</th>
+                        <th className="px-6 py-3 font-bold text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {(isTI ? ticketsFiltrados : misTicketsFiltrados).map((t) => (
+                        <tr key={t.id} onClick={() => abrirDetalle(t)} className="hover:bg-slate-50/80 cursor-pointer transition-colors">
+                          <td className="px-6 py-3.5 align-top">
+                            <span className="block text-[11px] font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(t)}</span>
+                            <span className="block text-sm font-semibold text-slate-800">{t.tipo_requerimiento}</span>
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            <span className={`${estadoBadgeClasses(t.estado)} text-[11px]`}>{t.estado}</span>
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            {t.prioridad ? (
+                              <span className={prioridadBadgeClasses(t.prioridad)}>{prioridadIcono(t.prioridad)}{t.prioridad}</span>
+                            ) : (
+                              <span className="text-sm text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            <span className="text-sm text-slate-600">{t.tecnico_asignado || 'Sin asignar'}</span>
+                          </td>
+                          <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                            <span className="text-xs text-slate-500">{formatoFecha(t.fecha_creacion)}</span>
+                          </td>
+                          <td className="px-6 py-3.5 align-top text-right whitespace-nowrap">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); abrirDetalle(t); }}
+                              className="px-3 py-1.5 rounded-lg bg-[#002395] text-white text-xs font-semibold hover:bg-[#001d78] active:scale-[0.98]"
+                            >
+                              Ver detalle
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>
@@ -1831,55 +2021,167 @@ function MainApp() {
 
       {ticketDetalle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={cerrarDetalle}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6 border-b border-slate-100 flex items-start justify-between gap-4 sticky top-0 bg-white z-10">
-              <div>
-                <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(ticketDetalle)}</span>
-                <h2 className="text-xl font-extrabold text-slate-900">{ticketDetalle.tipo_requerimiento}</h2>
-                <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <span className={`${estadoBadgeClasses(ticketDetalle.estado)} text-[10px]`}>{ticketDetalle.estado}</span>
-                  {ticketDetalle.prioridad && <span className="text-[10px] bg-slate-100 text-slate-600 font-semibold px-2 py-0.5 rounded-full">Prioridad: {ticketDetalle.prioridad}</span>}
+          <div className="bg-white rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 pt-5 pb-4 border-b border-slate-100 flex items-start justify-between gap-4 shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-mono font-bold text-[#ED1C24]">{formatoCorrelativo(ticketDetalle)}</span>
+                  <span className={`${estadoBadgeClasses(ticketDetalle.estado)} text-[11px]`}>{ticketDetalle.estado}</span>
+                </div>
+                <h2 className="text-xl font-extrabold text-slate-900 mt-1">{ticketDetalle.tipo_requerimiento}</h2>
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  {ticketDetalle.prioridad && (
+                    <span className={prioridadBadgeClasses(ticketDetalle.prioridad)}>
+                      {prioridadIcono(ticketDetalle.prioridad)}
+                      {ticketDetalle.prioridad}
+                    </span>
+                  )}
+                  {ticketDetalle.sede && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-slate-500">
+                      <MapPin className="w-3 h-3" /> {ticketDetalle.sede}
+                    </span>
+                  )}
                 </div>
               </div>
-              <button onClick={cerrarDetalle} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
-            </div>
 
-            <div className="p-6 space-y-5">
-              <TicketStepper estado={ticketDetalle.estado} />
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Solicitante</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{formatoSolicitante(ticketDetalle)}</p></div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Sede de origen</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.sede || '—'}</p></div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Tipo de colaborador</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.tipo_colaborador || '—'}</p></div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Categoría</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.tipo_requerimiento}</p></div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Técnico asignado</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{ticketDetalle.tecnico_asignado || 'Sin asignar'}</p></div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3"><p className="text-[11px] text-slate-500 uppercase font-bold">Fecha de creación</p><p className="text-sm font-semibold text-slate-800 mt-0.5">{formatoFecha(ticketDetalle.fecha_creacion)}</p></div>
-              </div>
-
-              <div>
-                <p className="text-xs text-slate-500 uppercase font-bold mb-1">Descripción</p>
-                <p className="text-sm text-slate-700 whitespace-pre-line bg-white border border-slate-200 rounded-xl p-4">{ticketDetalle.descripcion || 'Sin descripción.'}</p>
-              </div>
-
-              {ticketDetalle.notas_tecnicas && (
-                <div>
-                  <p className="text-xs text-slate-500 uppercase font-bold mb-1">Nota técnica</p>
-                  <p className="text-sm text-slate-700 bg-amber-50 border border-amber-200 rounded-xl p-4">{ticketDetalle.notas_tecnicas}</p>
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100">
-                <BackToHome onClick={volverAlInicio} />
-                <button onClick={() => exportarTicketPDF(ticketDetalle)} className="px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] flex items-center gap-2">
-                  <BookOpen className="w-4 h-4" /> Descargar PDF
-                </button>
+              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                 {isTI && (
                   <>
-                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'En Proceso')} className="px-3 py-2 rounded-lg bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-200 hover:bg-sky-100">En Proceso</button>
-                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'Solucionado')} className="px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-semibold border border-emerald-200 hover:bg-emerald-100">Solucionado</button>
-                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'Cerrado')} className="px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200">Cerrado</button>
+                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'Solucionado')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 active:scale-[0.98]">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Resolver
+                    </button>
+                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'En Proceso')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-sky-50 text-sky-700 text-xs font-semibold border border-sky-200 hover:bg-sky-100">
+                      En Proceso
+                    </button>
+                    <button onClick={() => handleUpdateStatus(ticketDetalle.id, 'Cerrado')} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 hover:bg-slate-200">
+                      Cerrar Ticket
+                    </button>
+                    <button onClick={() => handleWhatsApp(ticketDetalle)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700">
+                      WhatsApp
+                    </button>
                   </>
                 )}
+                <button onClick={() => exportarTicketPDF(ticketDetalle)} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50">
+                  <BookOpen className="w-3.5 h-3.5" /> PDF
+                </button>
+                <button onClick={cerrarDetalle} className="p-2 rounded-lg hover:bg-slate-100 text-slate-400">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="p-6 min-w-0">
+                  <TicketStepper estado={ticketDetalle.estado} />
+
+                  <div className="mt-5">
+                    <p className="text-xs text-slate-500 uppercase font-bold tracking-wide mb-2">Descripción</p>
+                    <p className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">{ticketDetalle.descripcion || 'Sin descripción.'}</p>
+                  </div>
+
+                  <div className="mt-6 border-t border-slate-100 pt-5">
+                    <p className="text-xs text-slate-500 uppercase font-bold tracking-wide mb-4 flex items-center gap-1.5">
+                      <MessageSquare className="w-3.5 h-3.5" /> Actividad
+                    </p>
+                    <TicketTimeline ticket={ticketDetalle} />
+                  </div>
+
+                  {isTI && (
+                    <div className="mt-6 border-t border-slate-100 pt-4">
+                      <p className="text-xs text-slate-500 uppercase font-bold tracking-wide mb-2">Responder / Nota técnica</p>
+                      <div className="flex items-start gap-2">
+                        <textarea
+                          value={notasDraft[ticketDetalle.id] || ''}
+                          onChange={(e) => setNotasDraft((prev) => ({ ...prev, [ticketDetalle.id]: e.target.value }))}
+                          placeholder="Escribe una nota técnica para el solicitante…"
+                          rows={3}
+                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#ED1C24] resize-none"
+                        />
+                        <button onClick={() => handleSaveNota(ticketDetalle.id)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] active:scale-[0.98] shrink-0">
+                          <Send className="w-3.5 h-3.5" /> Enviar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 flex-wrap pt-4 mt-4 border-t border-slate-100">
+                    <BackToHome onClick={volverAlInicio} />
+                  </div>
+                </div>
+
+                <aside className="border-l border-slate-100 bg-slate-50/50 p-6">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1">Propiedades</p>
+
+                  <div className="divide-y divide-slate-100">
+                    <Propiedad icono={<CircleDot className="w-3.5 h-3.5 text-slate-400" />} label="Estado">
+                      {isTI ? (
+                        <select
+                          value={ticketDetalle.estado}
+                          onChange={(e) => handleUpdateStatus(ticketDetalle.id, e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-sm"
+                        >
+                          <option>Pendiente</option><option>En Proceso</option><option>Solucionado</option><option>Cerrado</option>
+                        </select>
+                      ) : (
+                        <span className={`${estadoBadgeClasses(ticketDetalle.estado)} text-[11px]`}>{ticketDetalle.estado}</span>
+                      )}
+                    </Propiedad>
+
+                    <Propiedad icono={<Flag className="w-3.5 h-3.5 text-slate-400" />} label="Prioridad">
+                      {ticketDetalle.prioridad ? (
+                        <span className={prioridadBadgeClasses(ticketDetalle.prioridad)}>
+                          {prioridadIcono(ticketDetalle.prioridad)}
+                          {ticketDetalle.prioridad}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-slate-500">—</span>
+                      )}
+                    </Propiedad>
+
+                    <Propiedad icono={<User className="w-3.5 h-3.5 text-slate-400" />} label="Asignado a">
+                      {isTI ? (
+                        <select
+                          value={ticketDetalle.tecnico_asignado_id || ''}
+                          onChange={(e) => handleAsignarTecnico(ticketDetalle.id, e.target.value)}
+                          className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-sm"
+                        >
+                          <option value="">Sin asignar</option>
+                          {tecnicos.map((tc) => (
+                            <option key={tc.id} value={tc.id}>{tc.nombre}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p className="text-sm font-semibold text-slate-800">{ticketDetalle.tecnico_asignado || 'Sin asignar'}</p>
+                      )}
+                    </Propiedad>
+
+                    <Propiedad icono={<Tag className="w-3.5 h-3.5 text-slate-400" />} label="Categoría">
+                      <p className="text-sm font-semibold text-slate-800">{ticketDetalle.tipo_requerimiento || '—'}</p>
+                    </Propiedad>
+
+                    <Propiedad icono={<Clock className="w-3.5 h-3.5 text-slate-400" />} label="SLA / Fecha límite">
+                      <p className="text-sm font-semibold text-slate-800">{slaDetalle ? formatoFecha(slaDetalle.toISOString()) : '—'}</p>
+                      <p className={`text-[11px] mt-0.5 ${slaDetalleVencido ? 'text-red-600 font-semibold' : 'text-slate-400'}`}>
+                        {slaDetalleVencido ? 'SLA vencido' : slaDetalle ? `Vence ${formatoRestante(slaDetalle.toISOString())}` : ''}
+                      </p>
+                    </Propiedad>
+
+                    <Propiedad icono={<UserCircle2 className="w-3.5 h-3.5 text-slate-400" />} label="Cliente / Solicitante">
+                      <p className="text-sm font-semibold text-slate-800">{ticketDetalle.user_name?.trim() || '—'}</p>
+                      <p className="text-[11px] text-slate-400 truncate">{ticketDetalle.solicitante_email}</p>
+                    </Propiedad>
+
+                    <Propiedad icono={<MapPin className="w-3.5 h-3.5 text-slate-400" />} label="Sede de origen">
+                      <p className="text-sm font-semibold text-slate-800">{ticketDetalle.sede || '—'}</p>
+                    </Propiedad>
+
+                    <Propiedad icono={<Calendar className="w-3.5 h-3.5 text-slate-400" />} label="Fecha de creación">
+                      <p className="text-sm font-semibold text-slate-800">{formatoFecha(ticketDetalle.fecha_creacion)}</p>
+                      <p className="text-[11px] text-slate-400">{formatoRelativo(ticketDetalle.fecha_creacion)}</p>
+                    </Propiedad>
+                  </div>
+                </aside>
               </div>
             </div>
           </div>
