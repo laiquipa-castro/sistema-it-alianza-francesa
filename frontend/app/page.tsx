@@ -51,6 +51,18 @@ const ROL_LABELS: Record<string, string> = {
 
 const TI_ROLES = ['ADMIN_TI', 'HELPDESK_TI', 'ARQUITECTO_TI', 'INFRAESTRUCTURA_TI'];
 
+// Correos institucionales de TI autorizados como Administradores.
+// Al iniciar sesión, si el correo pertenece a esta lista se fuerza el rol
+// ADMIN_TI (acceso completo a todas las vistas/herramientas del sidebar); en
+// caso contrario se asigna Usuario (vista restringida a "Nuevo Requerimiento"
+// y "Mis Tickets").
+const TI_ADMIN_EMAILS = [
+  'l.aiquipa-castro@alianzafrancesa.org.pe',
+  'a.alcantara@alianzafrancesa.org.pe',
+  'j.salas@alianzafrancesa.org.pe',
+  'j.barbaran@alianzafrancesa.org.pe',
+];
+
 // Clases de badge según el estado del ticket (convención visual corporativa)
 function estadoBadgeClasses(estado: string): string {
   const base = 'inline-flex items-center font-bold px-2.5 py-0.5 rounded-full border';
@@ -589,11 +601,16 @@ function MainApp() {
       }
 
       const usuario = await res.json();
+      // Mapeo automático de roles de TI: evalúa el correo contra la lista
+      // autorizada. Si coincide -> ADMINISTRADOR (ADMIN_TI); si no -> USUARIO.
+      const rolForzado = TI_ADMIN_EMAILS.includes(email.trim().toLowerCase())
+        ? 'ADMIN_TI'
+        : 'Usuario';
       setUser({
         email: usuario.email,
         name: usuario.nombre || name,
-        role: ROL_LABELS[usuario.rol] || usuario.rol,
-        rol: usuario.rol,
+        role: ROL_LABELS[rolForzado] || rolForzado,
+        rol: rolForzado,
         cargo_ti: usuario.cargo_ti,
         picture,
       });
@@ -835,6 +852,20 @@ function MainApp() {
       }
       // Actualización optimista + reconciliación con el backend en tiempo real.
       setUsuarios((prev) => prev.map((u) => (u.id === editandoUsuario.id ? { ...u, ...data } : u)));
+
+      // Si se editó al propio usuario logueado, sincronizar el panel inferior del
+      // menú lateral (nombre, correo y rol) sin requerir volver a iniciar sesión.
+      if (editandoUsuario.email === user?.email) {
+        setUser((prev) => prev ? {
+          ...prev,
+          email: data.email,
+          name: data.nombre || prev.name,
+          rol: data.rol,
+          role: ROL_LABELS[data.rol] || data.rol,
+          cargo_ti: data.cargo_ti,
+        } : prev);
+      }
+
       setEditandoUsuario(null);
       await fetchUsuarios();
     } catch (err) {

@@ -72,6 +72,18 @@ app.add_middleware(
 DOMINIO_PERMITIDO = "@alianzafrancesa.org.pe"
 TI_ROLES = ["ADMIN_TI", "HELPDESK_TI", "ARQUITECTO_TI", "INFRAESTRUCTURA_TI"]
 
+# Correos institucionales de TI autorizados como Administradores.
+# Al iniciar sesión, estos correos fuerzan automáticamente el rol ADMIN_TI
+# (acceso completo a todas las vistas y herramientas del sidebar); cualquier
+# otro correo del dominio se asigna como Usuario corporativo (vista restringida
+# exclusivamente a "Nuevo Requerimiento" y "Mis Tickets").
+TI_ADMIN_EMAILS = {
+    "l.aiquipa-castro@alianzafrancesa.org.pe",
+    "a.alcantara@alianzafrancesa.org.pe",
+    "j.salas@alianzafrancesa.org.pe",
+    "j.barbaran@alianzafrancesa.org.pe",
+}
+
 SEDES_INICIALES = [
     ("Miraflores", "Sede Principal"),
     ("Los Olivos", "Sede Descentralizada"),
@@ -323,6 +335,15 @@ def verify_user(data: VerificarIn, db: Session = Depends(get_db)):
 
     if u.estado != "Activo":
         raise HTTPException(status_code=403, detail="Usuario suspendido. Contacte a Sistemas.")
+
+    # Mapeo automático de roles de TI: los correos autorizados fuerzan el rol
+    # ADMIN_TI (Administrador) en cada inicio de sesión; el resto se asigna como
+    # Usuario corporativo. Garantiza la asignación correcta e integrada del perfil.
+    rol_asignado = "ADMIN_TI" if email in TI_ADMIN_EMAILS else "Usuario"
+    if u.rol != rol_asignado:
+        u.rol = rol_asignado
+        db.commit()
+        db.refresh(u)
 
     return _usuario_to_dict(u)
 
