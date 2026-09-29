@@ -4,6 +4,7 @@ sqlalchemy==2.0.23
 pydantic==2.5.0
 email-validator
 python-dotenv
+google-auth[requests]>=2.23.4,<3
 
 # ---------------------------------------------------------------------------
 # Dependencias opcionales para producción (según el motor elegido)

@@ -30,13 +30,11 @@ CORS_ORIGINS: list[str] = _csv(
     os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 )
 
-# Garantizar que siempre se permita el frontend de producción (FRONTEND_URL) y
-# "*", independientemente de lo que defina CORS_ORIGINS, para evitar bloqueos
-# al conectar la app web con el servidor.
+# Se agrega el frontend configurado y se descarta cualquier comodín para que
+# navegadores de orígenes desconocidos no puedan consumir la API.
 if FRONTEND_URL and FRONTEND_URL not in CORS_ORIGINS:
     CORS_ORIGINS.append(FRONTEND_URL)
-if "*" not in CORS_ORIGINS:
-    CORS_ORIGINS.append("*")
+CORS_ORIGINS = [origin for origin in CORS_ORIGINS if origin != "*"]
 
 # URL pública del portal (usada para enlaces dentro de los correos).
 APP_URL: str = os.getenv("APP_URL", "http://localhost:3000").rstrip("/")
@@ -46,6 +44,10 @@ BACKEND_URL: str = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
 # Dominio corporativo permitido para autenticación Google OAuth.
 ALLOWED_EMAIL_DOMAIN: str = os.getenv("ALLOWED_EMAIL_DOMAIN", "@alianzafrancesa.org.pe")
+GOOGLE_CLIENT_ID: str = os.getenv(
+    "GOOGLE_CLIENT_ID",
+    "274739568755-s1kq1q8orh7e3edneubiahgimtrgvrgi.apps.googleusercontent.com",
+).strip()
 
 
 # ---------------------------------------------------------------------------

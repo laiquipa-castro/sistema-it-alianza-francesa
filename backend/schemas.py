@@ -6,7 +6,7 @@ Los esquemas de salida (``*Out``) heredan de :class:`ORMModel`, que habilita
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from config import ALLOWED_EMAIL_DOMAIN
 
@@ -58,7 +58,7 @@ class SedeOut(ORMModel):
 # Usuarios
 # ---------------------------------------------------------------------------
 class UsuarioIn(BaseModel):
-    email: str
+    email: EmailStr
     nombre: Optional[str] = None
     rol: str = "Usuario"
     estado: str = "Activo"
@@ -92,7 +92,9 @@ class UsuarioIn(BaseModel):
 
 
 class UsuarioUpdate(BaseModel):
-    email: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+    email: Optional[EmailStr] = None
     nombre: Optional[str] = None
     rol: Optional[str] = None
     estado: Optional[str] = None
@@ -100,11 +102,25 @@ class UsuarioUpdate(BaseModel):
     sede_id: Optional[int] = None
     cargo_ti: Optional[str] = None
 
+    @field_validator("rol")
+    @classmethod
+    def _validar_rol(cls, v):
+        if v not in ROLES_VALIDOS:
+            raise ValueError("Rol inválido")
+        return v
+
+    @field_validator("estado")
+    @classmethod
+    def _validar_estado(cls, v):
+        if v not in ESTADOS_VALIDOS:
+            raise ValueError("Estado inválido")
+        return v
+
     @field_validator("email")
     @classmethod
     def _validar_email(cls, v):
         if v is None:
-            return v
+            raise ValueError("El correo no puede ser nulo")
         if not validar_dominio(v):
             raise ValueError(
                 "Acceso restringido: solo se permiten correos @alianzafrancesa.org.pe"
@@ -128,11 +144,6 @@ class UsuarioOut(ORMModel):
 # ---------------------------------------------------------------------------
 # Autenticación / Verificación
 # ---------------------------------------------------------------------------
-class VerificarIn(BaseModel):
-    email: str
-    nombre: Optional[str] = None
-
-
 class AsistenteIn(BaseModel):
     consulta: str
 
@@ -189,12 +200,26 @@ class TicketIn(BaseModel):
 
 
 class TicketUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     estado: Optional[str] = None
     tecnico_asignado: Optional[str] = None
     tecnico_asignado_id: Optional[int] = None
     sede: Optional[str] = None
     notas_tecnicas: Optional[str] = None
+    nota_solucion: Optional[str] = None
     sede_id: Optional[int] = None
+
+
+class TicketNoteOut(ORMModel):
+    id: int
+    autor_id: Optional[int] = None
+    autor_email: str
+    autor_nombre: str
+    contenido: str
+    tipo: str
+    estado_resultante: Optional[str] = None
+    fecha_creacion: datetime
 
 
 class TicketOut(ORMModel):
@@ -211,6 +236,8 @@ class TicketOut(ORMModel):
     tipo_colaborador: Optional[str] = None
     notas_tecnicas: Optional[str] = None
     fecha_creacion: Optional[datetime] = None
+    fecha_actualizacion: Optional[datetime] = None
     sede_id: Optional[int] = None
     codigo: Optional[str] = None
     fecha_resolucion: Optional[datetime] = None
+    notas: list[TicketNoteOut] = Field(default_factory=list)

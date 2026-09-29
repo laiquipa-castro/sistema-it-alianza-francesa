@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, joinedload
 
 import models  # noqa: F401  # registra los modelos en Base.metadata
 from database import Base, SessionLocal, engine, get_db, init_db
-from models import Sede, SolucionFrecuente, Ticket, Usuario
+from models import LIMA_TZ, Sede, SolucionFrecuente, Ticket, TicketNote, Usuario, lima_now
 from schemas import (
     AsistenteIn,
     ESTADOS_TICKET,
@@ -31,10 +31,9 @@ from schemas import (
     UsuarioIn,
     UsuarioOut,
     UsuarioUpdate,
-    VerificarIn,
-    validar_dominio,
 )
 from config import CORS_ORIGINS
+from auth_service import verified_google_identity
 from email_service import send_new_ticket_email, send_ticket_resolved_email
 from whatsapp_service import send_new_ticket_whatsapp
 from ai_service import buscar_soluciones, consultar_deepseek
@@ -50,7 +49,9 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_data(db)
+        migrar_notas_legacy(db)
         normalizar_correos_ti(db)
+        asegurar_administradores_ti(db)
     finally:
         db.close()
     yield
@@ -73,11 +74,8 @@ app.add_middleware(
 DOMINIO_PERMITIDO = "@alianzafrancesa.org.pe"
 TI_ROLES = ["ADMIN_TI", "HELPDESK_TI", "ARQUITECTO_TI", "INFRAESTRUCTURA_TI"]
 
-# Correos institucionales de TI autorizados como Administradores.
-# Al iniciar sesión, estos correos fuerzan automáticamente el rol ADMIN_TI
-# (acceso completo a todas las vistas y herramientas del sidebar); cualquier
-# otro correo del dominio se asigna como Usuario corporativo (vista restringida
-# exclusivamente a "Nuevo Requerimiento" y "Mis Tickets").
+# Correos institucionales autorizados para el rol protegido ADMIN_TI.
+# El resto de las cuentas conserva el rol administrado en la base de datos.
 TI_ADMIN_EMAILS = {
     "l.aiquipa-castro@alianzafrancesa.org.pe",
     "a.alcantara@alianzafrancesa.org.pe",
@@ -164,6 +162,13 @@ def _usuario_to_dict(u: Usuario) -> dict:
 
 
 def _ticket_to_dict(t: Ticket) -> dict:
+    def fecha_lima(value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=LIMA_TZ)
+        return value.astimezone(LIMA_TZ)
+
     return {
         "id": t.id,
         "solicitante_email": t.solicitante_email,
@@ -177,10 +182,24 @@ def _ticket_to_dict(t: Ticket) -> dict:
         "sede": t.sede,
         "tipo_colaborador": t.tipo_colaborador,
         "notas_tecnicas": t.notas_tecnicas,
-        "fecha_creacion": t.fecha_creacion,
+        "fecha_creacion": fecha_lima(t.fecha_creacion),
+        "fecha_actualizacion": fecha_lima(t.fecha_actualizacion),
         "sede_id": t.sede_id,
         "codigo": t.codigo,
-        "fecha_resolucion": t.fecha_resolucion,
+        "fecha_resolucion": fecha_lima(t.fecha_resolucion),
+        "notas": [
+            {
+                "id": nota.id,
+                "autor_id": nota.autor_id,
+                "autor_email": nota.autor_email,
+                "autor_nombre": nota.autor_nombre,
+                "contenido": nota.contenido,
+                "tipo": nota.tipo,
+                "estado_resultante": nota.estado_resultante,
+                "fecha_creacion": fecha_lima(nota.fecha_creacion),
+            }
+            for nota in t.notas
+        ],
     }
 
 
@@ -231,6 +250,15 @@ def _migrate() -> None:
         if "fecha_resolucion" not in cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE tickets ADD COLUMN fecha_resolucion DATETIME"))
+        if "fecha_actualizacion" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE tickets ADD COLUMN fecha_actualizacion TIMESTAMP"))
+                conn.execute(
+                    text(
+                        "UPDATE tickets SET fecha_actualizacion = fecha_creacion "
+                        "WHERE fecha_actualizacion IS NULL"
+                    )
+                )
         if "tecnico_asignado_id" not in cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE tickets ADD COLUMN tecnico_asignado_id INTEGER"))
@@ -240,6 +268,9 @@ def _migrate() -> None:
 
     if "usuarios" in tablas:
         cols = {c["name"] for c in insp.get_columns("usuarios")}
+        if "google_sub" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE usuarios ADD COLUMN google_sub VARCHAR(255)"))
         if "telefono_whatsapp" not in cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE usuarios ADD COLUMN telefono_whatsapp VARCHAR(30)"))
@@ -281,6 +312,33 @@ def seed_data(db: Session) -> None:
     seed_soluciones(db)
 
 
+def migrar_notas_legacy(db: Session) -> None:
+    """Conserva una única vez las notas antiguas dentro del historial nuevo."""
+    tickets = (
+        db.query(Ticket)
+        .filter(Ticket.notas_tecnicas.isnot(None), Ticket.notas_tecnicas != "")
+        .all()
+    )
+    for ticket in tickets:
+        contenido_legacy = ticket.notas_tecnicas.strip()
+        if not contenido_legacy:
+            continue
+        if db.query(TicketNote.id).filter(TicketNote.ticket_id == ticket.id).first():
+            continue
+        db.add(
+            TicketNote(
+                ticket_id=ticket.id,
+                autor_email="sistema@alianzafrancesa.org.pe",
+                autor_nombre="Migración del sistema",
+                contenido=contenido_legacy,
+                tipo="legacy",
+                estado_resultante=ticket.estado,
+                fecha_creacion=ticket.fecha_resolucion or ticket.fecha_creacion or lima_now(),
+            )
+        )
+    db.commit()
+
+
 def normalizar_correos_ti(db: Session) -> None:
     """Actualiza los correos legacy de los técnicos TI a su correo corto oficial.
 
@@ -310,17 +368,29 @@ def normalizar_correos_ti(db: Session) -> None:
 # ---------------------------------------------------------------------------
 # Autorización basada en roles (RBAC)
 # ---------------------------------------------------------------------------
+def asegurar_administradores_ti(db: Session) -> None:
+    """Conserva activos los administradores institucionales y su rol protegido."""
+    for email in TI_ADMIN_EMAILS:
+        u = db.query(Usuario).filter(Usuario.email == email).first()
+        if u is None:
+            initial = next(item for item in USUARIOS_INICIALES if item["email"] == email)
+            u = Usuario(email=email, nombre=initial["nombre"], rol="ADMIN_TI", estado="Activo", cargo_ti=initial.get("cargo_ti"))
+            db.add(u)
+        else:
+            u.rol = "ADMIN_TI"
+            u.estado = "Activo"
+    db.commit()
+
+
 def _get_current_user(
-    x_user_email: Optional[str] = Header(default=None, alias="X-User-Email"),
+    identity: dict = Depends(verified_google_identity),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Resuelve el usuario autenticado a partir del encabezado X-User-Email."""
-    if not x_user_email or not validar_dominio(x_user_email):
-        raise HTTPException(status_code=401, detail="No autenticado")
+    """Obtiene permisos actuales desde la BD para una identidad acreditada."""
     u = (
         db.query(Usuario)
         .options(joinedload(Usuario.sede))
-        .filter(Usuario.email == x_user_email.strip().lower())
+        .filter(Usuario.google_sub == identity["sub"], Usuario.email == identity["email"])
         .first()
     )
     if u is None:
@@ -348,15 +418,12 @@ def require_ti(user: dict = Depends(_get_current_user)) -> dict:
 # Endpoints: Autenticación / Verificación
 # ---------------------------------------------------------------------------
 @app.post("/api/auth/verify", response_model=UsuarioOut)
-def verify_user(data: VerificarIn, db: Session = Depends(get_db)):
-    """Verifica el dominio y auto-registra al usuario si es la primera vez."""
-    if not validar_dominio(data.email):
-        raise HTTPException(
-            status_code=403,
-            detail="Acceso restringido: solo se permiten correos @alianzafrancesa.org.pe",
-        )
-
-    email = data.email.strip().lower()
+def verify_user(identity: dict = Depends(verified_google_identity), db: Session = Depends(get_db)):
+    """Vincula una cuenta únicamente después de verificar su token Google."""
+    email = identity["email"]
+    linked = db.query(Usuario).filter(Usuario.google_sub == identity["sub"]).first()
+    if linked is not None and linked.email != email:
+        raise HTTPException(409, "El correo registrado no coincide con Google. Contacte a Sistemas.")
     u = (
         db.query(Usuario)
         .options(joinedload(Usuario.sede))
@@ -365,23 +432,24 @@ def verify_user(data: VerificarIn, db: Session = Depends(get_db)):
     )
 
     if u is None:
-        # Auto-registro como Usuario corporativo genérico
-        u = Usuario(email=email, nombre=data.nombre, rol="Usuario", estado="Activo")
+        u = Usuario(email=email, nombre=identity["nombre"], rol="Usuario", estado="Activo")
         db.add(u)
-        db.commit()
-        db.refresh(u)
+
+    if u.google_sub is not None and u.google_sub != identity["sub"]:
+        raise HTTPException(403, "El correo está vinculado a otra identidad Google")
 
     if u.estado != "Activo":
         raise HTTPException(status_code=403, detail="Usuario suspendido. Contacte a Sistemas.")
 
-    # Mapeo automático de roles de TI: los correos autorizados fuerzan el rol
-    # ADMIN_TI (Administrador) en cada inicio de sesión; el resto se asigna como
-    # Usuario corporativo. Garantiza la asignación correcta e integrada del perfil.
-    rol_asignado = "ADMIN_TI" if email in TI_ADMIN_EMAILS else "Usuario"
-    if u.rol != rol_asignado:
-        u.rol = rol_asignado
+    u.google_sub = identity["sub"]
+    if email in TI_ADMIN_EMAILS:
+        u.rol = "ADMIN_TI"
+    try:
         db.commit()
-        db.refresh(u)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "La cuenta cambió durante el acceso. Intente nuevamente.") from None
+    db.refresh(u)
 
     return _usuario_to_dict(u)
 
@@ -465,15 +533,18 @@ def get_usuario(email: str, db: Session = Depends(get_db), user: dict = Depends(
 def create_usuario(usuario: UsuarioIn, db: Session = Depends(get_db), user: dict = Depends(require_admin)):
     if db.query(Usuario).filter(Usuario.email == usuario.email).first():
         raise HTTPException(status_code=409, detail="El usuario ya existe")
+    if usuario.rol == "ADMIN_TI" and usuario.email not in TI_ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="El rol ADMIN_TI está reservado a los correos autorizados")
 
     u = Usuario(
         email=usuario.email,
         nombre=usuario.nombre,
-        rol=usuario.rol,
+        rol="ADMIN_TI" if usuario.email in TI_ADMIN_EMAILS else usuario.rol,
         estado=usuario.estado,
         tipo_colaborador=usuario.tipo_colaborador,
         sede_id=usuario.sede_id,
         cargo_ti=usuario.cargo_ti,
+        telefono_whatsapp=usuario.telefono_whatsapp,
     )
     db.add(u)
     try:
@@ -491,6 +562,22 @@ def update_usuario(usuario_id: int, update: UsuarioUpdate, db: Session = Depends
     if u is None:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
+    if not update.model_fields_set:
+        raise HTTPException(400, "No hay campos para actualizar")
+    if u.email in TI_ADMIN_EMAILS:
+        if update.email is not None and update.email != u.email:
+            raise HTTPException(409, "El correo de un administrador institucional está protegido")
+        if update.rol is not None and update.rol != "ADMIN_TI":
+            raise HTTPException(409, "Los administradores institucionales deben conservar el rol ADMIN_TI")
+        if update.estado is not None and update.estado != "Activo":
+            raise HTTPException(409, "Los administradores institucionales deben permanecer activos")
+    elif update.email in TI_ADMIN_EMAILS:
+        raise HTTPException(409, "No se puede reasignar un correo reservado de TI")
+    elif update.rol == "ADMIN_TI":
+        raise HTTPException(403, "El rol ADMIN_TI está reservado a los correos autorizados")
+    if update.sede_id is not None and db.get(Sede, update.sede_id) is None:
+        raise HTTPException(400, "La sede indicada no existe")
+
     if update.email is not None and update.email != u.email:
         if db.query(Usuario).filter(Usuario.email == update.email, Usuario.id != usuario_id).first():
             raise HTTPException(status_code=409, detail="El correo ya está registrado en otro usuario")
@@ -505,7 +592,11 @@ def update_usuario(usuario_id: int, update: UsuarioUpdate, db: Session = Depends
     if "sede_id" in update.model_fields_set:
         u.sede_id = update.sede_id
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "La actualización entra en conflicto con los datos existentes") from None
     db.refresh(u)
     return _usuario_to_dict(u)
 
@@ -515,10 +606,16 @@ def delete_usuario(usuario_id: int, db: Session = Depends(get_db), user: dict = 
     u = db.get(Usuario, usuario_id)
     if u is None:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if u.email in TI_ADMIN_EMAILS:
+        raise HTTPException(409, "No se puede eliminar un administrador institucional")
     if u.id == user["id"]:
         raise HTTPException(status_code=400, detail="No puede eliminar su propia cuenta")
     db.delete(u)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "El usuario tiene datos relacionados que impiden eliminarlo") from None
     return {"ok": True, "detail": "Usuario eliminado"}
 
 
@@ -535,12 +632,14 @@ def list_tickets(db: Session = Depends(get_db), user: dict = Depends(_get_curren
 
 
 @app.post("/api/tickets", response_model=TicketOut)
-def create_ticket(ticket: TicketIn, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def create_ticket(ticket: TicketIn, background_tasks: BackgroundTasks, db: Session = Depends(get_db), user: dict = Depends(_get_current_user)):
+    if ticket.solicitante_email != user["email"]:
+        raise HTTPException(403, "No puede crear solicitudes en nombre de otra cuenta")
     # Resuelve el solicitante desde el directorio corporativo para obtener el
     # nombre completo (displayName) y su sede/perfil, sin insertarlo en la
     # gestión de usuarios TI (solo se usa como referencia del ticket).
     _usuario = db.query(Usuario).filter(Usuario.email == ticket.solicitante_email).first()
-    solicitante_nombre = (ticket.user_name or (_usuario.nombre if _usuario else None))
+    solicitante_nombre = user["nombre"]
     perfil_colaborador = ticket.tipo_colaborador or (_usuario.tipo_colaborador if _usuario else None) or ""
     sede_origen = ticket.sede or (_usuario.sede.nombre if _usuario and _usuario.sede else None) or ""
 
@@ -551,11 +650,11 @@ def create_ticket(ticket: TicketIn, background_tasks: BackgroundTasks, db: Sessi
         tipo_requerimiento=ticket.tipo_requerimiento,
         prioridad=ticket.prioridad,
         descripcion=ticket.descripcion,
-        estado=ticket.estado,
-        tecnico_asignado=ticket.tecnico_asignado,
+        estado="Pendiente",
+        tecnico_asignado=None,
         sede=sede_origen or ticket.sede,
         tipo_colaborador=perfil_colaborador or ticket.tipo_colaborador,
-        notas_tecnicas=ticket.notas_tecnicas,
+        notas_tecnicas=None,
         sede_id=ticket.sede_id,
     )
     db.add(t)
@@ -596,16 +695,20 @@ def update_ticket(ticket_id: int, ticket_update: TicketUpdate, background_tasks:
     if t is None:
         raise HTTPException(status_code=404, detail="Ticket no encontrado")
     estado_anterior = t.estado
-
-    if (
-        ticket_update.estado is None
-        and ticket_update.tecnico_asignado is None
-        and ticket_update.sede is None
-        and ticket_update.notas_tecnicas is None
-        and ticket_update.sede_id is None
-        and ticket_update.tecnico_asignado_id is None
-    ):
+    campos = ticket_update.model_fields_set
+    if not campos:
         raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+
+    if "tecnico_asignado" in campos:
+        raise HTTPException(
+            status_code=400,
+            detail="La asignación debe realizarse mediante tecnico_asignado_id",
+        )
+    if "nota_solucion" in campos and ticket_update.estado not in ("Solucionado", "Cerrado"):
+        raise HTTPException(
+            status_code=400,
+            detail="La nota de solución solo se registra al solucionar o cerrar el ticket",
+        )
 
     if ticket_update.estado is not None:
         if ticket_update.estado not in ESTADOS_TICKET:
@@ -613,24 +716,76 @@ def update_ticket(ticket_id: int, ticket_update: TicketUpdate, background_tasks:
                 status_code=400,
                 detail=f"Estado inválido. Valores permitidos: {', '.join(ESTADOS_TICKET)}",
             )
+        if ticket_update.estado in ("Solucionado", "Cerrado"):
+            nota_solucion = (ticket_update.nota_solucion or "").strip()
+            if not nota_solucion:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Debe registrar una nota de solución antes de finalizar el ticket",
+                )
+            db.add(
+                TicketNote(
+                    ticket=t,
+                    autor_id=user["id"],
+                    autor_email=user["email"],
+                    autor_nombre=user["nombre"] or user["email"],
+                    contenido=nota_solucion,
+                    tipo="solucion",
+                    estado_resultante=ticket_update.estado,
+                )
+            )
         t.estado = ticket_update.estado
-        if ticket_update.estado == "Solucionado":
-            t.fecha_resolucion = datetime.now()
-    if ticket_update.tecnico_asignado is not None:
-        t.tecnico_asignado = ticket_update.tecnico_asignado
-    if ticket_update.tecnico_asignado_id is not None:
-        t.tecnico_asignado_id = ticket_update.tecnico_asignado_id
-        tecnico = db.get(Usuario, ticket_update.tecnico_asignado_id)
-        if tecnico:
-            t.tecnico_asignado = tecnico.nombre
+        if ticket_update.estado in ("Solucionado", "Cerrado"):
+            if t.fecha_resolucion is None:
+                t.fecha_resolucion = lima_now()
+        elif estado_anterior in ("Solucionado", "Cerrado"):
+            t.fecha_resolucion = None
+    if "tecnico_asignado_id" in campos:
+        if ticket_update.tecnico_asignado_id is None:
+            t.tecnico_asignado_id = None
+            t.tecnico_asignado = None
+        else:
+            tecnico = db.get(Usuario, ticket_update.tecnico_asignado_id)
+            if tecnico is None:
+                raise HTTPException(status_code=400, detail="El técnico indicado no existe")
+            if tecnico.estado != "Activo" or tecnico.rol not in TI_ROLES:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El usuario indicado no es un técnico TI activo",
+                )
+            t.tecnico_asignado_id = tecnico.id
+            t.tecnico_asignado = tecnico.nombre or tecnico.email
     if ticket_update.sede is not None:
         t.sede = ticket_update.sede
-    if ticket_update.notas_tecnicas is not None:
-        t.notas_tecnicas = ticket_update.notas_tecnicas
-    if ticket_update.sede_id is not None:
+    if "notas_tecnicas" in campos:
+        contenido = (ticket_update.notas_tecnicas or "").strip()
+        if not contenido:
+            raise HTTPException(status_code=400, detail="La nota técnica no puede estar vacía")
+        db.add(
+            TicketNote(
+                ticket=t,
+                autor_id=user["id"],
+                autor_email=user["email"],
+                autor_nombre=user["nombre"] or user["email"],
+                contenido=contenido,
+                tipo="tecnica",
+                estado_resultante=t.estado,
+            )
+        )
+    if "sede_id" in campos:
+        if ticket_update.sede_id is not None and db.get(Sede, ticket_update.sede_id) is None:
+            raise HTTPException(status_code=400, detail="La sede indicada no existe")
         t.sede_id = ticket_update.sede_id
 
-    db.commit()
+    t.fecha_actualizacion = lima_now()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="El ticket cambió durante la actualización. Recargue e intente nuevamente.",
+        ) from None
     db.refresh(t)
 
     # Si el ticket pasó a "Solucionado", notificar al solicitante (segundo plano)
@@ -650,7 +805,7 @@ def list_tecnicos(db: Session = Depends(get_db), user: dict = Depends(require_ti
     """Lista los técnicos del equipo TI disponibles para asignación."""
     rows = (
         db.query(Usuario)
-        .filter(Usuario.rol.in_(TI_ROLES))
+        .filter(Usuario.rol.in_(TI_ROLES), Usuario.estado == "Activo")
         .order_by(Usuario.nombre)
         .all()
     )
@@ -666,7 +821,7 @@ def list_tecnicos(db: Session = Depends(get_db), user: dict = Depends(require_ti
 
 
 @app.post("/api/asistente")
-def asistente(data: AsistenteIn, db: Session = Depends(get_db)):
+def asistente(data: AsistenteIn, db: Session = Depends(get_db), user: dict = Depends(_get_current_user)):
     """Asistente virtual de primer nivel (soluciones frecuentes + DeepSeek)."""
     soluciones = buscar_soluciones(db, data.consulta)
     if soluciones:

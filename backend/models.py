@@ -8,11 +8,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+
+LIMA_TZ = ZoneInfo("America/Lima")
+
+
+def lima_now() -> datetime:
+    """Fecha consciente de zona horaria para todos los eventos de tickets."""
+    return datetime.now(LIMA_TZ)
 
 
 class Sede(Base):
@@ -42,6 +50,7 @@ class Usuario(Base):
         String(255), unique=True, index=True, nullable=False
     )
     nombre: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    google_sub: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, unique=True, index=True)
     rol: Mapped[str] = mapped_column(
         String(60), nullable=False, default="Usuario", index=True
     )
@@ -82,10 +91,13 @@ class Ticket(Base):
     )
     notas_tecnicas: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     fecha_creacion: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, default=datetime.now, index=True
+        DateTime(timezone=True), nullable=False, default=lima_now, index=True
+    )
+    fecha_actualizacion: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lima_now, onupdate=lima_now
     )
     fecha_resolucion: Mapped[Optional[datetime]] = mapped_column(
-        DateTime, nullable=True
+        DateTime(timezone=True), nullable=True
     )
     codigo: Mapped[Optional[str]] = mapped_column(
         String(30), nullable=True, unique=True, index=True
@@ -99,9 +111,38 @@ class Ticket(Base):
         ForeignKey("sedes.id", ondelete="SET NULL"), nullable=True, index=True
     )
     sede_rel: Mapped[Optional["Sede"]] = relationship(back_populates="tickets")
+    notas: Mapped[list["TicketNote"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        order_by="TicketNote.fecha_creacion",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Ticket id={self.id} estado={self.estado!r}>"
+
+
+class TicketNote(Base):
+    """Entrada inmutable del historial técnico de un ticket."""
+
+    __tablename__ = "ticket_notes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticket_id: Mapped[int] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    autor_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("usuarios.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    autor_email: Mapped[str] = mapped_column(String(255), nullable=False)
+    autor_nombre: Mapped[str] = mapped_column(String(255), nullable=False)
+    contenido: Mapped[str] = mapped_column(Text, nullable=False)
+    tipo: Mapped[str] = mapped_column(String(30), nullable=False, default="tecnica")
+    estado_resultante: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    fecha_creacion: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lima_now, index=True
+    )
+
+    ticket: Mapped["Ticket"] = relationship(back_populates="notas")
 
 
 class SolucionFrecuente(Base):

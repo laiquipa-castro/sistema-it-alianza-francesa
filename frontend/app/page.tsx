@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google';
-import { jwtDecode } from 'jwt-decode';
+import React, { useState, useEffect, useRef } from 'react';
+import { GoogleOAuthProvider, GoogleLogin, googleLogout, type CredentialResponse } from '@react-oauth/google';
+import { useRouter } from 'next/navigation';
 import { 
   ShieldAlert, CheckCircle2, Clock, 
   PlusCircle, LayoutDashboard, LogOut,
@@ -11,7 +11,8 @@ import {
 } from 'lucide-react';
 import BackToHome from '@/components/BackToHome';
 
-const GOOGLE_CLIENT_ID = "274739568755-s1kq1q8orh7e3edneubiahgimtrgvrgi.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID
+  || '274739568755-s1kq1q8orh7e3edneubiahgimtrgvrgi.apps.googleusercontent.com';
 
 // URL base de la API - configurable via variable de entorno
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
@@ -30,14 +31,21 @@ interface Ticket {
   tipo_colaborador?: string;
   notas_tecnicas?: string;
   fecha_creacion: string;
+  fecha_actualizacion?: string;
   codigo?: string;
   fecha_resolucion?: string;
+  notas?: TicketNote[];
 }
 
-interface GoogleUserData {
-  email: string;
-  name: string;
-  picture?: string;
+interface TicketNote {
+  id: number;
+  autor_id?: number;
+  autor_email: string;
+  autor_nombre: string;
+  contenido: string;
+  tipo: 'tecnica' | 'solucion' | 'legacy';
+  estado_resultante?: string;
+  fecha_creacion: string;
 }
 
 // Etiquetas legibles para los roles definidos en el backend
@@ -50,18 +58,6 @@ const ROL_LABELS: Record<string, string> = {
 };
 
 const TI_ROLES = ['ADMIN_TI', 'HELPDESK_TI', 'ARQUITECTO_TI', 'INFRAESTRUCTURA_TI'];
-
-// Correos institucionales de TI autorizados como Administradores.
-// Al iniciar sesión, si el correo pertenece a esta lista se fuerza el rol
-// ADMIN_TI (acceso completo a todas las vistas/herramientas del sidebar); en
-// caso contrario se asigna Usuario (vista restringida a "Nuevo Requerimiento"
-// y "Mis Tickets").
-const TI_ADMIN_EMAILS = [
-  'l.aiquipa-castro@alianzafrancesa.org.pe',
-  'a.alcantara@alianzafrancesa.org.pe',
-  'j.salas@alianzafrancesa.org.pe',
-  'j.barbaran@alianzafrancesa.org.pe',
-];
 
 // Clases de badge según el estado del ticket (convención visual corporativa)
 function estadoBadgeClasses(estado: string): string {
@@ -105,6 +101,7 @@ function formatoFecha(iso?: string): string {
     hour: '2-digit',
     minute: '2-digit',
     hour12: true,
+    timeZone: 'America/Lima',
   });
 }
 
@@ -213,35 +210,19 @@ function construirTimeline(t: Ticket): NodoTimeline[] {
     detalle: t.descripcion || undefined,
     tipo: 'solicitante',
   });
-  if (t.tecnico_asignado) {
+  for (const nota of t.notas || []) {
     nodos.push({
-      fecha: t.fecha_resolucion || t.fecha_creacion,
-      actor: t.tecnico_asignado,
+      fecha: nota.fecha_creacion,
+      actor: nota.autor_nombre || nota.autor_email,
       rol: 'Técnico TI',
-      accion: 'Tomó el caso y está atendiendo la solicitud',
+      accion: nota.tipo === 'solucion'
+        ? `Registró la solución y cambió el estado a ${nota.estado_resultante || t.estado}`
+        : 'Agregó una nota técnica',
+      detalle: nota.contenido,
       tipo: 'tecnico',
     });
   }
-  if (t.notas_tecnicas) {
-    nodos.push({
-      fecha: t.fecha_resolucion || t.fecha_creacion,
-      actor: t.tecnico_asignado || 'Equipo TI',
-      rol: 'Técnico TI',
-      accion: 'Aplicó la solución técnica',
-      detalle: t.notas_tecnicas,
-      tipo: 'tecnico',
-    });
-  }
-  if (t.estado === 'Solucionado' || t.estado === 'Cerrado') {
-    nodos.push({
-      fecha: t.fecha_resolucion || t.fecha_creacion,
-      actor: t.tecnico_asignado || 'Equipo TI',
-      rol: 'Sistema',
-      accion: t.estado === 'Cerrado' ? 'Caso cerrado' : 'Caso resuelto',
-      tipo: 'sistema',
-    });
-  }
-  return nodos;
+  return nodos.sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
 }
 
 // Línea de tiempo con avatares, fechas relativas y conectores sutiles
@@ -357,67 +338,26 @@ function TicketStepper({ estado }: { estado: string }) {
   );
 }
 
-// Subcomponente exclusivo para manejar el botón de inicio de sesión con Google
-function GoogleLoginButton({ onSuccess, onError }: { onSuccess: (credentialResponse: any) => void; onError: () => void }) {
-  const login = useGoogleLogin({
-    onSuccess: async (tokenResponse) => {
-      try {
-        // Obtenemos los datos del usuario directamente con el token
-        const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-          headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
-        });
-        const userData = await res.json();
-        
-        // Formateamos como lo espera tu función handleGoogleSuccess
-        onSuccess({
-          credential: null,
-          customUser: {
-            email: userData.email,
-            name: userData.name,
-            picture: userData.picture
-          }
-        });
-      } catch (err) {
-        onError();
-      }
-    },
-    onError: () => onError(),
-  });
-
-  return (
-    <button
-      type="button"
-      onClick={() => login()}
-      className="flex items-center justify-center gap-3 w-full max-w-xs px-4 py-2.5 bg-white border border-slate-300 rounded-full shadow-sm hover:bg-slate-50 active:scale-[0.98] transition-all font-medium text-slate-700 text-sm mx-auto"
-    >
-      <svg className="w-5 h-5" viewBox="0 0 24 24">
-        <path
-          fill="#4285F4"
-          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-        />
-        <path
-          fill="#34A853"
-          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-        />
-        <path
-          fill="#FBBC05"
-          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-        />
-        <path
-          fill="#EA4335"
-          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-        />
-      </svg>
-      Iniciar sesión con Google
-    </button>
-  );
+// Google entrega un ID token; la identidad y los permisos se resuelven en la API.
+function GoogleLoginButton({ onSuccess, onError }: { onSuccess: (response: CredentialResponse) => void; onError: () => void }) {
+  return <GoogleLogin onSuccess={onSuccess} onError={onError} text="signin_with" shape="pill" />;
 }
 
-function MainApp() {
-  const [user, setUser] = useState<{ email: string; name: string; role: string; rol?: string; cargo_ti?: string; picture?: string } | null>(null);
+async function apiError(response: Response): Promise<string> {
+  const data = await response.json().catch(() => null);
+  if (typeof data?.detail === 'string') return data.detail;
+  if (Array.isArray(data?.detail)) {
+    return data.detail.map((item: { msg?: string }) => item.msg || 'Dato inválido').join('. ');
+  }
+  return `La operación fue rechazada (${response.status}). Intente nuevamente.`;
+}
+
+function MainApp({ onSessionEnd, sessionError }: { onSessionEnd: (message?: string) => void; sessionError: string }) {
+  const router = useRouter();
+  const [user, setUser] = useState<{ token: string; email: string; name: string; role: string; rol?: string; cargo_ti?: string; picture?: string } | null>(null);
   const [activeTab, setActiveTab] = useState<'crear' | 'mis-tickets' | 'dashboard' | 'usuarios' | 'sedes' | 'entrenamiento'>('crear');
   const [tickets, setTickets] = useState<Ticket[]>([]);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [errorMsg, setErrorMsg] = useState(sessionError);
 
   // Formulario
   const [categoria, setCategoria] = useState('💻 Soporte Técnico / Hardware');
@@ -434,8 +374,13 @@ function MainApp() {
   const [editGuardando, setEditGuardando] = useState(false);
   const [editError, setEditError] = useState('');
   const [notasDraft, setNotasDraft] = useState<Record<number, string>>({});
+  const [notaGuardandoId, setNotaGuardandoId] = useState<number | null>(null);
   const [codigoSeguimiento, setCodigoSeguimiento] = useState<string | null>(null);
   const [ticketDetalle, setTicketDetalle] = useState<Ticket | null>(null);
+  const [cierrePendiente, setCierrePendiente] = useState<{ ticketId: number; estado: 'Solucionado' | 'Cerrado' } | null>(null);
+  const [notaSolucion, setNotaSolucion] = useState('');
+  const [cierreError, setCierreError] = useState('');
+  const [cierreGuardando, setCierreGuardando] = useState(false);
 
   // Filtros combinados del dashboard/bandeja (aplican para el equipo TI)
   const [filtroSede, setFiltroSede] = useState('');
@@ -464,12 +409,24 @@ function MainApp() {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
 
+  const apiFetch = async (url: string, options: RequestInit = {}) => {
+    const headers = new Headers(options.headers);
+    if (user?.token) headers.set('Authorization', `Bearer ${user.token}`);
+    const response = await fetch(url, { ...options, headers, cache: 'no-store' });
+    if (response.status === 401) {
+      onSessionEnd('Tu sesión venció o dejó de ser válida. Inicia sesión nuevamente.');
+    }
+    return response;
+  };
+
   const fetchTickets = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tickets`, {
-        headers: { 'X-User-Email': user?.email || '' }
+      const res = await apiFetch(`${API_BASE_URL}/api/tickets`, {
+        headers: { 'Authorization': `Bearer ${user?.token || ''}` }
       });
+      if (!res.ok) throw new Error(await apiError(res));
       const data = await res.json();
+      if (!Array.isArray(data)) throw new Error('Respuesta de tickets inválida');
       setTickets(data);
     } catch (err) {
       console.error("Error conectando con la API:", err);
@@ -478,8 +435,8 @@ function MainApp() {
 
   const fetchUsuarios = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/usuarios`, {
-        headers: { 'X-User-Email': user?.email || '' }
+      const res = await apiFetch(`${API_BASE_URL}/api/usuarios`, {
+        headers: { 'Authorization': `Bearer ${user?.token || ''}` }
       });
       if (res.ok) setUsuarios(await res.json());
     } catch (err) {
@@ -489,7 +446,7 @@ function MainApp() {
 
   const fetchSedes = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/sedes`);
+      const res = await apiFetch(`${API_BASE_URL}/api/sedes`);
       if (res.ok) setSedes(await res.json());
     } catch (err) {
       console.error("Error cargando sedes:", err);
@@ -498,8 +455,8 @@ function MainApp() {
 
   const fetchTecnicos = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tecnicos`, {
-        headers: { 'X-User-Email': user?.email || '' }
+      const res = await apiFetch(`${API_BASE_URL}/api/tecnicos`, {
+        headers: { 'Authorization': `Bearer ${user?.token || ''}` }
       });
       if (res.ok) setTecnicos(await res.json());
     } catch (err) {
@@ -539,6 +496,7 @@ function MainApp() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        setCierrePendiente(null);
         setTicketDetalle(null);
         setCodigoSeguimiento(null);
         setEditandoUsuario(null);
@@ -562,66 +520,39 @@ function MainApp() {
     }
   };
 
-  const handleGoogleSuccess = async (credentialResponse: any) => {
+  const handleGoogleSuccess = async ({ credential }: CredentialResponse) => {
+    if (!credential) {
+      setErrorMsg('Google no entregó una credencial válida.');
+      return;
+    }
     try {
-      let email = '';
-      let name = '';
-      let picture = '';
-
-      if (credentialResponse.customUser) {
-        email = credentialResponse.customUser.email;
-        name = credentialResponse.customUser.name;
-        picture = credentialResponse.customUser.picture;
-      } else if (credentialResponse.credential) {
-        const decoded: GoogleUserData = jwtDecode(credentialResponse.credential);
-        email = decoded.email;
-        name = decoded.name;
-        picture = decoded.picture || '';
-      }
-
-      // Verificación estricta de dominio + auto-registro contra el backend (fuente de verdad)
       const res = await fetch(`${API_BASE_URL}/api/auth/verify`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, nombre: name }),
+        headers: { Authorization: `Bearer ${credential}` },
+        cache: 'no-store',
       });
-
       if (!res.ok) {
-        let msg = 'Acceso restringido: Debe ingresar únicamente con su cuenta @alianzafrancesa.org.pe';
-        try {
-          const err = await res.json();
-          if (typeof err?.detail === 'string') {
-            msg = err.detail;
-          } else if (Array.isArray(err?.detail) && err.detail[0]?.msg) {
-            msg = err.detail[0].msg;
-          }
-        } catch {}
-        setErrorMsg(msg);
+        setErrorMsg(await apiError(res));
         return;
       }
-
       const usuario = await res.json();
-      // Mapeo automático de roles de TI: evalúa el correo contra la lista
-      // autorizada. Si coincide -> ADMINISTRADOR (ADMIN_TI); si no -> USUARIO.
-      const rolForzado = TI_ADMIN_EMAILS.includes(email.trim().toLowerCase())
-        ? 'ADMIN_TI'
-        : 'Usuario';
       setUser({
+        token: credential,
         email: usuario.email,
-        name: usuario.nombre || name,
-        role: ROL_LABELS[rolForzado] || rolForzado,
-        rol: rolForzado,
+        name: usuario.nombre || usuario.email,
+        role: ROL_LABELS[usuario.rol] || usuario.rol,
+        rol: usuario.rol,
         cargo_ti: usuario.cargo_ti,
-        picture,
       });
       setErrorMsg('');
-    } catch (error) {
-      setErrorMsg('Error al procesar la autenticación con Google.');
+    } catch {
+      setErrorMsg('No se pudo conectar con el servidor para verificar Google.');
     }
   };
 
   const handleLogout = () => {
-    setUser(null);
+    googleLogout();
+    onSessionEnd();
   };
 
   const handleCreateTicket = async (e: React.FormEvent) => {
@@ -634,7 +565,7 @@ function MainApp() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tickets`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/tickets`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -647,6 +578,7 @@ function MainApp() {
           tipo_colaborador: tipoColaborador
         })
       });
+      if (!res.ok) throw new Error(await apiError(res));
       const data = await res.json();
       setDescripcion('');
       setSuccessMsg(true);
@@ -654,48 +586,92 @@ function MainApp() {
       fetchTickets();
       setTimeout(() => setSuccessMsg(false), 4000);
     } catch (err) {
-      alert("Error al guardar la solicitud");
+      alert(err instanceof Error ? err.message : 'Error al guardar la solicitud');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleUpdateStatus = async (id: number, nuevoEstado: string) => {
-    await fetch(`${API_BASE_URL}/api/tickets/${id}`, {
+  const actualizarTicketLocal = (actualizado: Ticket) => {
+    setTickets((prev) => prev.map((ticket) => ticket.id === actualizado.id ? actualizado : ticket));
+    setTicketDetalle((prev) => prev?.id === actualizado.id ? actualizado : prev);
+  };
+
+  const actualizarTicket = async (id: number, payload: Record<string, unknown>): Promise<Ticket> => {
+    const res = await apiFetch(`${API_BASE_URL}/api/tickets/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
-      body: JSON.stringify({
-        estado: nuevoEstado,
-        tecnico_asignado: user?.name
-      })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
-    fetchTickets();
+    if (!res.ok) throw new Error(await apiError(res));
+    const actualizado = await res.json() as Ticket;
+    actualizarTicketLocal(actualizado);
+    return actualizado;
+  };
+
+  const handleUpdateStatus = async (id: number, nuevoEstado: string) => {
+    if (nuevoEstado === 'Solucionado' || nuevoEstado === 'Cerrado') {
+      setCierrePendiente({ ticketId: id, estado: nuevoEstado });
+      setNotaSolucion('');
+      setCierreError('');
+      return;
+    }
+    try {
+      await actualizarTicket(id, { estado: nuevoEstado });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo actualizar el estado.');
+    }
+  };
+
+  const confirmarCierre = async () => {
+    if (!cierrePendiente) return;
+    const nota = notaSolucion.trim();
+    if (!nota) {
+      setCierreError('La explicación técnica de la solución es obligatoria.');
+      return;
+    }
+    setCierreGuardando(true);
+    setCierreError('');
+    try {
+      await actualizarTicket(cierrePendiente.ticketId, {
+        estado: cierrePendiente.estado,
+        nota_solucion: nota,
+      });
+      setCierrePendiente(null);
+      setNotaSolucion('');
+    } catch (error) {
+      setCierreError(error instanceof Error ? error.message : 'No se pudo finalizar el ticket.');
+    } finally {
+      setCierreGuardando(false);
+    }
   };
 
   const handleSaveNota = async (id: number) => {
     const nota = (notasDraft[id] || '').trim();
-    if (!nota) return;
-    await fetch(`${API_BASE_URL}/api/tickets/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
-      body: JSON.stringify({ notas_tecnicas: nota })
-    });
-    setNotasDraft((prev) => {
-      const n = { ...prev };
-      delete n[id];
-      return n;
-    });
-    fetchTickets();
+    if (!nota || notaGuardandoId === id) return;
+    setNotaGuardandoId(id);
+    try {
+      await actualizarTicket(id, { notas_tecnicas: nota });
+      setNotasDraft((prev) => {
+        const n = { ...prev };
+        delete n[id];
+        return n;
+      });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo registrar la nota.');
+    } finally {
+      setNotaGuardandoId(null);
+    }
   };
 
   const handleAsignarTecnico = async (ticketId: number, tecnicoId: string) => {
-    if (!tecnicoId) return;
-    await fetch(`${API_BASE_URL}/api/tickets/${ticketId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
-      body: JSON.stringify({ tecnico_asignado_id: Number(tecnicoId) })
-    });
-    fetchTickets();
+    try {
+      await actualizarTicket(ticketId, {
+        tecnico_asignado_id: tecnicoId ? Number(tecnicoId) : null,
+      });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo asignar el técnico.');
+    }
   };
 
   const handleWhatsApp = (t: Ticket) => {
@@ -710,7 +686,7 @@ function MainApp() {
     if (!asistenteConsulta.trim()) return;
     setAsistenteLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/asistente`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/asistente`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ consulta: asistenteConsulta })
@@ -726,8 +702,8 @@ function MainApp() {
 
   const fetchSoluciones = async () => {
     try {
-      const res = await fetch(`${API_BASE_URL}/api/soluciones`, {
-        headers: { 'X-User-Email': user?.email || '' }
+      const res = await apiFetch(`${API_BASE_URL}/api/soluciones`, {
+        headers: { 'Authorization': `Bearer ${user?.token || ''}` }
       });
       if (res.ok) setSoluciones(await res.json());
     } catch (err) {
@@ -737,9 +713,9 @@ function MainApp() {
 
   const handleCreateSolucion = async () => {
     if (!nuevaSolucion.titulo.trim() || !nuevaSolucion.pasos.trim()) return;
-    await fetch(`${API_BASE_URL}/api/soluciones`, {
+    await apiFetch(`${API_BASE_URL}/api/soluciones`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user?.token || ''}` },
       body: JSON.stringify(nuevaSolucion)
     });
     setNuevaSolucion({ titulo: '', palabras_clave: '', pasos: '', categoria: 'Impresoras' });
@@ -747,9 +723,9 @@ function MainApp() {
   };
 
   const handleToggleSolucion = async (id: number, activo: boolean) => {
-    await fetch(`${API_BASE_URL}/api/soluciones/${id}`, {
+    await apiFetch(`${API_BASE_URL}/api/soluciones/${id}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user?.token || ''}` },
       body: JSON.stringify({ activo })
     });
     fetchSoluciones();
@@ -757,9 +733,9 @@ function MainApp() {
 
   const handleDeleteSolucion = async (id: number) => {
     if (!confirm('¿Eliminar esta solución?')) return;
-    await fetch(`${API_BASE_URL}/api/soluciones/${id}`, {
+    await apiFetch(`${API_BASE_URL}/api/soluciones/${id}`, {
       method: 'DELETE',
-      headers: { 'X-User-Email': user?.email || '' }
+      headers: { 'Authorization': `Bearer ${user?.token || ''}` }
     });
     fetchSoluciones();
   };
@@ -771,7 +747,7 @@ function MainApp() {
     setChatInput('');
     setChatLoading(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/asistente`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/asistente`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ consulta: texto })
@@ -798,16 +774,26 @@ function MainApp() {
     setActiveTab('crear');
   };
 
-  const handleUserUpdate = async (id: number, campos: Record<string, any>) => {
-    const res = await fetch(`${API_BASE_URL}/api/usuarios/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
-      body: JSON.stringify(campos)
-    });
-    if (!res.ok) return;
-    // Actualización optimista + reconciliación con el backend.
-    setUsuarios((prev) => prev.map((u) => (u.id === id ? { ...u, ...campos } : u)));
-    await fetchUsuarios();
+  const handleUserUpdate = async (id: number, campos: Record<string, unknown>) => {
+    try {
+      const res = await apiFetch(`${API_BASE_URL}/api/usuarios/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(campos)
+      });
+      if (!res.ok) throw new Error(await apiError(res));
+      const actualizado = await res.json();
+      setUsuarios((prev) => prev.map((u) => (u.id === id ? actualizado : u)));
+      if (actualizado.email === user?.email) {
+        if (actualizado.estado !== 'Activo' || actualizado.rol !== user?.rol) {
+          onSessionEnd('Tu acceso cambió. Inicia sesión nuevamente.');
+          return;
+        }
+      }
+      await fetchUsuarios();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo actualizar el usuario.');
+    }
   };
 
   const abrirEdicion = (u: any) => {
@@ -833,9 +819,9 @@ function MainApp() {
     setEditGuardando(true);
     setEditError('');
     try {
-      const res = await fetch(`${API_BASE_URL}/api/usuarios/${editandoUsuario.id}`, {
+      const res = await apiFetch(`${API_BASE_URL}/api/usuarios/${editandoUsuario.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user?.token || ''}` },
         body: JSON.stringify({
           nombre: editForm.nombre,
           email,
@@ -845,17 +831,25 @@ function MainApp() {
           sede_id: editForm.sede_id ? Number(editForm.sede_id) : null,
         })
       });
-      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setEditError(data?.detail || 'No se pudo actualizar el usuario.');
+        setEditError(await apiError(res));
         return;
       }
+      const data = await res.json();
       // Actualización optimista + reconciliación con el backend en tiempo real.
       setUsuarios((prev) => prev.map((u) => (u.id === editandoUsuario.id ? { ...u, ...data } : u)));
 
       // Si se editó al propio usuario logueado, sincronizar el panel inferior del
       // menú lateral (nombre, correo y rol) sin requerir volver a iniciar sesión.
+      if (editandoUsuario.email === user?.email && data.email !== user?.email) {
+        onSessionEnd('Correo actualizado. Inicia sesión con la cuenta Google correspondiente.');
+        return;
+      }
       if (editandoUsuario.email === user?.email) {
+        if (data.estado !== 'Activo' || data.rol !== user?.rol) {
+          onSessionEnd('Tu acceso cambió. Inicia sesión nuevamente.');
+          return;
+        }
         setUser((prev) => prev ? {
           ...prev,
           email: data.email,
@@ -868,6 +862,9 @@ function MainApp() {
 
       setEditandoUsuario(null);
       await fetchUsuarios();
+      // Revalidación inmediata de la ruta para reflejar los cambios en pantalla
+      // sin recarga manual (equivalente a revalidatePath en componentes servidor).
+      router.refresh();
     } catch (err) {
       setEditError('Error de conexión al actualizar el usuario.');
     } finally {
@@ -877,20 +874,23 @@ function MainApp() {
 
   const handleUserDelete = async (id: number) => {
     if (!confirm('¿Eliminar este usuario?')) return;
-    const res = await fetch(`${API_BASE_URL}/api/usuarios/${id}`, {
-      method: 'DELETE',
-      headers: { 'X-User-Email': user?.email || '' }
-    });
-    if (!res.ok) return;
-    setUsuarios((prev) => prev.filter((u) => u.id !== id));
-    await fetchUsuarios();
+    try {
+      const res = await apiFetch(`${API_BASE_URL}/api/usuarios/${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error(await apiError(res));
+      setUsuarios((prev) => prev.filter((u) => u.id !== id));
+      await fetchUsuarios();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo eliminar el usuario.');
+    }
   };
 
   const handleSedeDelete = async (id: number) => {
     if (!confirm('¿Eliminar esta sede?')) return;
-    const res = await fetch(`${API_BASE_URL}/api/sedes/${id}`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/sedes/${id}`, {
       method: 'DELETE',
-      headers: { 'X-User-Email': user?.email || '' }
+      headers: { 'Authorization': `Bearer ${user?.token || ''}` }
     });
     if (!res.ok) return;
     setSedes((prev) => prev.filter((s) => s.id !== id));
@@ -902,24 +902,27 @@ function MainApp() {
 
   const handleCreateUsuario = async () => {
     if (!nuevoUsuario.email.trim()) return;
-    const res = await fetch(`${API_BASE_URL}/api/usuarios`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
-      body: JSON.stringify(nuevoUsuario)
-    });
-    if (res.ok) {
+    try {
+      const res = await apiFetch(`${API_BASE_URL}/api/usuarios`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nuevoUsuario)
+      });
+      if (!res.ok) throw new Error(await apiError(res));
       const creado = await res.json();
       setUsuarios((prev) => [...prev, creado]);
+      setNuevoUsuario({ email: '', nombre: '', rol: 'Usuario' });
+      await fetchUsuarios();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'No se pudo crear el usuario.');
     }
-    setNuevoUsuario({ email: '', nombre: '', rol: 'Usuario' });
-    await fetchUsuarios();
   };
 
   const handleCreateSede = async () => {
     if (!nuevaSede.nombre.trim()) return;
-    const res = await fetch(`${API_BASE_URL}/api/sedes`, {
+    const res = await apiFetch(`${API_BASE_URL}/api/sedes`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Email': user?.email || '' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user?.token || ''}` },
       body: JSON.stringify(nuevaSede)
     });
     if (res.ok) {
@@ -1141,14 +1144,14 @@ function MainApp() {
     const tarjetas = lista.map((t) => {
       const nodos: { fecha: string; actor: string; rol: string; accion: string; detalle?: string }[] = [];
       nodos.push({ fecha: t.fecha_creacion, actor: formatoSolicitante(t), rol: 'Solicitante', accion: 'Registro de solicitud', detalle: t.descripcion || 'Sin detalle adicional' });
-      if (t.tecnico_asignado) {
-        nodos.push({ fecha: t.fecha_resolucion || t.fecha_creacion, actor: t.tecnico_asignado, rol: 'Técnico TI', accion: 'Asignación y atención del caso' });
-      }
-      if (t.notas_tecnicas) {
-        nodos.push({ fecha: t.fecha_resolucion || t.fecha_creacion, actor: t.tecnico_asignado || 'Equipo TI', rol: 'Técnico TI', accion: 'Solución técnica aplicada', detalle: t.notas_tecnicas });
-      }
-      if (estadoResuelto(t.estado)) {
-        nodos.push({ fecha: t.fecha_resolucion || t.fecha_creacion, actor: t.tecnico_asignado || 'Equipo TI', rol: 'Técnico TI', accion: 'Caso RESUELTO y cerrado' });
+      for (const nota of t.notas || []) {
+        nodos.push({
+          fecha: nota.fecha_creacion,
+          actor: nota.autor_nombre || nota.autor_email,
+          rol: 'Técnico TI',
+          accion: nota.tipo === 'solucion' ? `Solución registrada · ${nota.estado_resultante || t.estado}` : 'Nota técnica registrada',
+          detalle: nota.contenido,
+        });
       }
       const timeline = nodos.map((n, i) => `
           <div class="nodo">
@@ -1161,6 +1164,8 @@ function MainApp() {
             </div>
           </div>`).join('');
       const estadoBadge = estadoResuelto(t.estado) ? '<span class="estado resuelto">RESUELTO</span>' : '<span class="estado proceso">EN PROCESO</span>';
+      const notaFinal = [...(t.notas || [])].reverse().find((nota) => nota.tipo === 'solucion')
+        || [...(t.notas || [])].reverse()[0];
       return `
       <section class="reporte-card">
         <header class="encabezado">
@@ -1192,7 +1197,7 @@ function MainApp() {
           <h2>Conclusión y Solución Aplicada</h2>
           <div class="conclusion-box">
             <div class="conclusion-estado">${estadoBadge}</div>
-            <p class="conclusion-texto">${esc(t.notas_tecnicas || (estadoResuelto(t.estado) ? 'Caso atendido y resuelto por el equipo de TI.' : 'Caso en atención por el equipo de soporte TI.'))}</p>
+            <p class="conclusion-texto">${esc(notaFinal?.contenido || (estadoResuelto(t.estado) ? 'Caso atendido y resuelto por el equipo de TI.' : 'Caso en atención por el equipo de soporte TI.'))}</p>
           </div>
         </div>
         <div class="firmas">
@@ -1729,7 +1734,6 @@ function MainApp() {
                 <option value="HELPDESK_TI">HELPDESK_TI</option>
                 <option value="ARQUITECTO_TI">ARQUITECTO_TI</option>
                 <option value="INFRAESTRUCTURA_TI">INFRAESTRUCTURA_TI</option>
-                <option value="ADMIN_TI">ADMIN_TI</option>
               </select>
               <button
                 onClick={handleCreateUsuario}
@@ -1756,7 +1760,7 @@ function MainApp() {
                         onChange={(e) => handleUserUpdate(u.id, { rol: e.target.value })}
                         className="bg-slate-50 border border-slate-300 rounded-lg px-2 py-1.5 text-xs"
                       >
-                        <option value="ADMIN_TI">ADMIN_TI</option>
+                        {u.rol === 'ADMIN_TI' && <option value="ADMIN_TI">ADMIN_TI</option>}
                         <option value="HELPDESK_TI">HELPDESK_TI</option>
                         <option value="ARQUITECTO_TI">ARQUITECTO_TI</option>
                         <option value="INFRAESTRUCTURA_TI">INFRAESTRUCTURA_TI</option>
@@ -2007,11 +2011,11 @@ function MainApp() {
                     onChange={(e) => setEditForm({ ...editForm, rol: e.target.value })}
                     className="mt-1 w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm"
                   >
+                    {editandoUsuario.rol === 'ADMIN_TI' && <option value="ADMIN_TI">ADMIN_TI</option>}
                     <option value="Usuario">Usuario</option>
                     <option value="HELPDESK_TI">HELPDESK_TI</option>
                     <option value="ARQUITECTO_TI">ARQUITECTO_TI</option>
                     <option value="INFRAESTRUCTURA_TI">INFRAESTRUCTURA_TI</option>
-                    <option value="ADMIN_TI">ADMIN_TI</option>
                   </select>
                 </div>
                 <div>
@@ -2155,8 +2159,15 @@ function MainApp() {
                           rows={3}
                           className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[#ED1C24] resize-none"
                         />
-                        <button onClick={() => handleSaveNota(ticketDetalle.id)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] active:scale-[0.98] shrink-0">
-                          <Send className="w-3.5 h-3.5" /> Enviar
+                        <button
+                          onClick={() => handleSaveNota(ticketDetalle.id)}
+                          disabled={notaGuardandoId === ticketDetalle.id || !(notasDraft[ticketDetalle.id] || '').trim()}
+                          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#ED1C24] text-white text-xs font-semibold hover:bg-[#C41219] active:scale-[0.98] shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {notaGuardandoId === ticketDetalle.id
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <Send className="w-3.5 h-3.5" />}
+                          {notaGuardandoId === ticketDetalle.id ? 'Guardando…' : 'Enviar'}
                         </button>
                       </div>
                     </div>
@@ -2239,6 +2250,82 @@ function MainApp() {
                     </Propiedad>
                   </div>
                 </aside>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cierrePendiente && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="titulo-nota-solucion"
+        >
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-6">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-[#ED1C24]">
+                  {cierrePendiente.estado}
+                </p>
+                <h2 id="titulo-nota-solucion" className="mt-1 text-xl font-extrabold text-slate-900">
+                  Registrar Nota de Solución
+                </h2>
+                <p className="mt-2 text-sm text-slate-500">
+                  Describe el diagnóstico, las acciones realizadas y el resultado obtenido.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCierrePendiente(null)}
+                disabled={cierreGuardando}
+                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 disabled:opacity-50"
+                aria-label="Cancelar cierre"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-4 p-6">
+              <label htmlFor="nota-solucion" className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+                Explicación técnica de la solución
+              </label>
+              <textarea
+                id="nota-solucion"
+                autoFocus
+                required
+                rows={6}
+                value={notaSolucion}
+                onChange={(event) => {
+                  setNotaSolucion(event.target.value);
+                  if (cierreError) setCierreError('');
+                }}
+                placeholder="Ej.: Se reinstaló el controlador, se validó la conectividad y el usuario confirmó el funcionamiento correcto."
+                className="w-full resize-none rounded-xl border border-slate-300 bg-slate-50 p-3 text-sm"
+              />
+              {cierreError && (
+                <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                  {cierreError}
+                </p>
+              )}
+              <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setCierrePendiente(null)}
+                  disabled={cierreGuardando}
+                  className="rounded-xl bg-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmarCierre}
+                  disabled={cierreGuardando || !notaSolucion.trim()}
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {cierreGuardando && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {cierreGuardando ? 'Guardando…' : `Confirmar ${cierrePendiente.estado}`}
+                </button>
               </div>
             </div>
           </div>
@@ -2372,9 +2459,21 @@ function MainApp() {
 }
 
 export default function AppIT() {
+  const [sessionVersion, setSessionVersion] = useState(0);
+  const [sessionError, setSessionError] = useState('');
+  const sessionEpoch = useRef(0);
+  const endSession = (message = '') => {
+    if (sessionEpoch.current !== sessionVersion) return;
+    sessionEpoch.current += 1;
+    setSessionError(message);
+    setSessionVersion((version) => version + 1);
+  };
+  if (!GOOGLE_CLIENT_ID) {
+    return <p role="alert" className="p-8 text-center">Falta configurar el acceso con Google. Contacte a Sistemas.</p>;
+  }
   return (
-    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <MainApp />
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID} locale="es">
+      <MainApp key={sessionVersion} onSessionEnd={endSession} sessionError={sessionError} />
     </GoogleOAuthProvider>
   );
 }
